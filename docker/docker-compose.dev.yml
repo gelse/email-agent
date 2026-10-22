@@ -1,0 +1,71 @@
+# Canonical dev compose (M0T4). Relative paths resolve from this file's directory (docker/).
+# Consumed via root docker-compose.yml (include:) and directly with
+# `docker compose -f docker/docker-compose.dev.yml --env-file .env`.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: emailagent
+      POSTGRES_DB: emailagent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U emailagent -d emailagent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: api-runtime
+    environment:
+      ConnectionStrings__Postgres: ${ConnectionStrings__Postgres}
+      Blobs__Path: /data/blobs
+    volumes:
+      - blobs:/data/blobs
+    ports:
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    secrets:
+      - postgres_password
+      - AUTH__SigningKey
+      - system_kek
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: web
+    # Not host-published at M0; reachable on the compose network only (SPA served
+    # by nginx; api is the only host-exposed service).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+secrets:
+  postgres_password:
+    environment: POSTGRES_PASSWORD
+  AUTH__SigningKey:
+    environment: AUTH__SigningKey
+  system_kek:
+    environment: system_kek
+
+volumes:
+  pg_data:
+  blobs:

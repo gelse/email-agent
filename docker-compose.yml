@@ -1,0 +1,7 @@
+# Requires Docker Compose v2.24+ (secrets source `environment:` needs >= 2.24;
+# the `include:` directive needs >= 2.20).
+# Plain `docker compose up` resolves to docker/docker-compose.dev.yml. The `-f`
+# form MUST be invoked with `--env-file .env` to match this form's .env handling
+# (without it, project dir is docker/ and docker/.env is used).
+include:
+  - docker/docker-compose.dev.yml

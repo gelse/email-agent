@@ -1,0 +1,238 @@
+# .github/workflows/ci.yml
+# M0T5 — CI pipeline (Ops). Triggers per SQ-M0-6; amd64-only per SQ-M0-7.
+#
+# Branch-protection checklist (manual repo setting at rollout, SQ-M0-6):
+#   Required status checks (all five must be green to merge to main):
+#     - "CI / build"
+#     - "CI / test"
+#     - "CI / container-build"
+#     - "CI / compose-config"
+#     - "CI / smoke"
+#   Recommended: "Require branches to be up to date before merging".
+#   No repository/Actions secrets are used at M0 (AGENTS.md #6); the
+#   compose-config job materializes a throwaway, runner-local .env from
+#   .env.example.
+#   Note: test/container-build/compose-config use `needs: build`; if `build`
+#   fails those checks are skipped (not green) — re-run after fixing build.
+# Compose floor: docker-compose.yml requires Compose >= 2.24 (the secrets
+# source `environment:` needs >= 2.24; the `include:` needs >= 2.20).
+# ubuntu-latest ships a recent Compose; the config job fails loudly on older
+# runners.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "true"
+
+jobs:
+  # amd64 only at M0 (SQ-M0-7); no matrix. ubuntu-latest is linux/amd64.
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore
+
+      - name: Restore dotnet tools
+        run: dotnet tool restore
+
+      - name: Generate SBOM (CycloneDX)
+        # -dpr skips the tool's own redundant restore (assets already exist
+        # from the Restore/Build steps above); transitive resolution is on by
+        # default on the pinned tool version.
+        run: dotnet cyclonedx EmailAgent.sln -o artifacts/ -fn SBOM.json -dpr
+
+      - name: Assert SBOM is valid CycloneDX JSON
+        run: |
+          set -euo pipefail
+          test -f artifacts/SBOM.json
+          test "$(jq -r '.bomFormat' artifacts/SBOM.json)" = "CycloneDX"
+          test -n "$(jq -r '.specVersion' artifacts/SBOM.json)"
+          test "$(jq '.components | length' artifacts/SBOM.json)" -gt 0
+
+      - name: Generate third-party notices
+        run: scripts/generate-notices.sh artifacts/THIRD_PARTY_NOTICES.md
+
+      - name: Assert third-party notices
+        run: |
+          set -euo pipefail
+          test -s artifacts/THIRD_PARTY_NOTICES.md
+          grep -q '^| Package | Version | License |' artifacts/THIRD_PARTY_NOTICES.md
+          grep -q 'Npgsql' artifacts/THIRD_PARTY_NOTICES.md
+          grep -q 'Serilog.AspNetCore' artifacts/THIRD_PARTY_NOTICES.md
+          grep -q 'OpenTelemetry.Extensions.Hosting' artifacts/THIRD_PARTY_NOTICES.md
+          # Pin the resolved license column (not just the package name) so a
+          # regression in license extraction cannot pass silently.
+          grep -q '| Npgsql | 8.0.6 | PostgreSQL |' artifacts/THIRD_PARTY_NOTICES.md
+          # Determinism: a fresh regeneration must be byte-identical.
+          cp artifacts/THIRD_PARTY_NOTICES.md /tmp/notices.first
+          scripts/generate-notices.sh /tmp/notices.second
+          cmp /tmp/notices.first /tmp/notices.second
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SBOM.md
+          path: artifacts/SBOM.json
+
+      - name: Upload third-party notices artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: THIRD_PARTY_NOTICES.md
+          path: artifacts/THIRD_PARTY_NOTICES.md
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-diagnostics
+          path: |
+            **/*.log
+            TestResults/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      # Conditional guard: run dotnet test only when tests/**/*.csproj matches;
+      # otherwise print an explicit skip notice and exit 0. The guard is an
+      # explicit, visible step (not a silent job-level skip). At M0 no test
+      # projects exist, so the skip notice is emitted. When M1T1 adds
+      # tests/**/*.csproj the glob matches and dotnet test runs automatically.
+      - name: Run tests when present (conditional guard)
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          matches=( tests/**/*.csproj )
+          if [ "${#matches[@]}" -gt 0 ]; then
+            dotnet test --no-restore
+          else
+            echo "no test projects yet — created by M1T1"
+            exit 0
+          fi
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-failure-diagnostics
+          path: TestResults/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  container-build:
+    name: container-build
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build api-runtime image
+        run: docker build -f docker/Dockerfile --target api-runtime .
+
+      - name: Build web image
+        run: docker build -f docker/Dockerfile --target web .
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-build-failure-diagnostics
+          path: "**/*.log"
+          if-no-files-found: ignore
+          retention-days: 7
+
+  compose-config:
+    name: compose-config
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Materialize throwaway runner .env
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          # Throwaway, non-secret values -- workspace-only, never committed (AGENTS.md #6).
+          sed -i 's/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci-throwaway-postgres-password/' .env
+          sed -i 's/^AUTH__SigningKey=$/AUTH__SigningKey=ci-throwaway-signing-key-not-a-real-secret-32chars/' .env
+          sed -i 's/^system_kek=$/system_kek=ci-throwaway-system-kek/' .env
+          sed -i 's|^ConnectionStrings__Postgres=$|ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=emailagent;Username=emailagent;Password=ci-throwaway-postgres-password|' .env
+          # Fail loudly if materialization went stale (e.g. .env.example drift) instead of passing green on blanks.
+          grep -Eq '^POSTGRES_PASSWORD=.+' .env
+          grep -Eq '^AUTH__SigningKey=.+' .env
+          grep -Eq '^system_kek=.+' .env
+          grep -Eq '^ConnectionStrings__Postgres=.+' .env
+
+      - name: Validate root compose form (include wrapper)
+        run: docker compose config
+
+      - name: Validate -f compose form
+        run: docker compose -f docker/docker-compose.dev.yml --env-file .env config
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-config-failure-diagnostics
+          path: "**/*.log"
+          if-no-files-found: ignore
+          retention-days: 7
+
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run smoke script
+        run: bash scripts/smoke.sh
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-failure-diagnostics
+          path: "**/*.log"
+          if-no-files-found: ignore
+          retention-days: 7
