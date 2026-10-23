@@ -1,0 +1,9 @@
+# Open questions — index
+
+All previously recorded questions have been answered and removed.
+
+| Status | No open questions |
+|---|---|
+| Index of category files | `open-questions-auth.md` — Login, OTPs, refresh tokens, 2FA, first-login flows, identity schema details, and the change-password re-login transition.<br>`open-questions-connectors.md` — IMAP/SMTP connectors, OAuth, attachments, plugin DTO/manifest contracts, and egress allow-listing.<br>`open-questions-deployment.md` — Container orchestration, process model, plugin isolation, Windows portability, plugin signing key, and build/CI foundation conventions.<br>`open-questions-encryption.md` — KDF and parameters, DEK/KEK custody, passphrase change, and session-key (envelope) transport.<br>`open-questions-legal.md` — Retention of message content, GDPR erasure vs. non-recoverable encryption, data residency, and third-party notices.<br>`open-questions-llm.md` — Model catalog and endpoint topology, prefilter semantics, tool calling, cost caps, probing, and test fixtures.<br>`open-questions-actions.md` — Action whitelist and argument schemas, confirmation vs. dry-run precedence, dispatcher and config resolution, the Telegram chat-target default, and the actions side of retryable-failure handling.<br>`open-questions-api.md` — The single HTTP API + SPA contract: versioning, OpenAPI, CORS, tokens, errors, pagination, rate limits, the SSE live log, and the SPA surface.<br>`open-questions-operations.md` — Audit log (retention, integrity, HMAC, action names), multi-tenancy fairness, scheduling and retries, rate limits, backups, first-admin bootstrap, prod-compose ownership, and the Telegram reactive egress posture. |
+
+New questions are recorded in the appropriate category file per `AGENTS.md`; an entry is removed once answered.
