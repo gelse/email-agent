@@ -124,7 +124,7 @@ if [ ! -f .env ]; then
     cp .env.example .env
     sed -i 's/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci-throwaway-postgres-password/' .env
     sed -i 's/^AUTH__SigningKey=$/AUTH__SigningKey=ci-throwaway-signing-key-not-a-real-secret-32chars/' .env
-    sed -i 's/^system_kek=$/system_kek=ci-throwaway-system-kek/' .env
+    sed -i 's/^system_kek=$/system_kek=ci-throwaway-system-kek-0123456789abcdef/' .env
     # M1T1+: Audit:HmacKey is ValidateOnStart for the api service — without
     # this fill the fresh-bootstrap path dies before the first /health/ready.
     sed -i 's/^AUDIT__HmacKey=$/AUDIT__HmacKey=ci-throwaway-audit-hmac-key-0123456789abcdef/' .env
@@ -147,6 +147,16 @@ for k in POSTGRES_PASSWORD AUTH__SigningKey system_kek ConnectionStrings__Postgr
     if ! grep -Eq "^${k}=.+" .env; then
         echo "FAIL: .env has no value for $k" >&2
         exit 1
+    fi
+    if [ "$k" = "system_kek" ]; then
+        # Q-E7: System:KeyEncryptionKey is ValidateOnStart at >= 32 UTF-8
+        # bytes — a shorter throwaway KEK aborts the api host at boot
+        # (OptionsValidationException -> container exit before any probe).
+        kek_len="$(grep -m1 '^system_kek=' .env | cut -d= -f2- | tr -d '\n' | wc -c | tr -d '[:space:]')"
+        if [ "$kek_len" -lt 32 ]; then
+            echo "FAIL: .env system_kek is ${kek_len} bytes; System:KeyEncryptionKey must be >= 32 bytes (Q-E7, API ValidateOnStart)" >&2
+            exit 1
+        fi
     fi
 done
 
