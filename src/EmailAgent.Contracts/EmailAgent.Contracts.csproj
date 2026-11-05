@@ -1,7 +1,33 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    M1T1 §5 contracts shell (shared between EmailAgent.Api and EmailAgent.Spa).
-    TargetFramework, Nullable, ImplicitUsings, TreatWarningsAsErrors and
-    InvariantGlobalization are enforced centrally in Directory.Build.props.
+    M2T1 §5/§9 — connector contracts shared by EmailAgent.Api, EmailAgent.Spa
+    and the connector projects (M2T3+). TargetFramework, Nullable,
+    ImplicitUsings, TreatWarningsAsErrors and InvariantGlobalization are
+    enforced centrally in Directory.Build.props and are deliberately not
+    repeated here.
   -->
+  <PropertyGroup>
+    <!-- M2T1 step 1: NuGet metadata so `dotnet pack` yields EmailAgent.Contracts.1.0.0.nupkg. -->
+    <PackageId>EmailAgent.Contracts</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>email-agent</Authors>
+    <Description>Connector plugin contracts for the email-agent service</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IsPackable>true</IsPackable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      M2T1 deviation (recorded in the task file): the task names JsonSchema.Net
+      10.0.0 with the namespace JsonSchema.Net.Evaluations. Neither exists on
+      NuGet — the latest published line is 9.6.0 and the type lives in the
+      `Json.Schema` namespace (see GlobalUsings.cs for the matching alias).
+      Upgrade path: bump this version and the alias together in one change.
+      Infrastructure packages (Npgsql, EF Core, MailKit) are deliberately
+      absent per M2T1 acceptance criteria.
+    -->
+    <PackageReference Include="JsonSchema.Net" Version="9.6.0" />
+  </ItemGroup>
 </Project>
