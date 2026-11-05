@@ -10,6 +10,9 @@ never holds the keys that decrypt your data.
   `plans/implementation/M1-identity-encryption-and-data-model.md` (local
   checkout), starting with `plans/implementation/M1T1-solution-scaffolding-and-dev-environment.md`
 
+**Status:** M0 (foundation) and M1 (identity, encryption, and the data
+model) are complete.
+
 ## Quickstart (development)
 
 ```bash
@@ -54,3 +57,10 @@ warning you accept once for localhost, and command-line clients need
 | `scripts/` | seed-dev, smoke, notices generation |
 
 See `AGENTS.md` for the contributor/agent operating manual.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE) — see that file
+for the full text. You are free to use, modify, and fork it, including for
+commercial purposes, provided the copyright and permission notices are
+retained.
