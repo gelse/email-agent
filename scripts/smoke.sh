@@ -7,6 +7,102 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# --- Failure diagnostics -----------------------------------------------------
+# On any non-zero exit, dump a sanitized snapshot of the compose project to
+# artifacts/smoke-failure.log BEFORE teardown; CI's smoke job uploads
+# **/*.log as the smoke-failure-diagnostics artifact. Sanitized by design:
+# only the whitelisted inspect fields below -- never full inspect JSON and
+# never container env (secret material). Every command is guarded with
+# `|| true`, so the diagnostics path can never fail the script earlier than
+# the real error and never changes its exit status.
+ARTIFACT_LOG="$ROOT_DIR/artifacts/smoke-failure.log"
+CURRENT_FORM="startup"
+BASE_URL=""
+DIAG_DONE=0
+rm -f "$ARTIFACT_LOG" 2>/dev/null || true
+
+ADHOC_CONTAINER=""
+ADHOC_ENV=""
+
+cleanup() {
+    if [ -n "${ADHOC_CONTAINER:-}" ]; then
+        docker rm -f "$ADHOC_CONTAINER" >/dev/null 2>&1 || true
+        ADHOC_CONTAINER=""
+    fi
+    if [ -n "${ADHOC_ENV:-}" ] && [ -f "${ADHOC_ENV:-}" ]; then
+        rm -f "$ADHOC_ENV" >/dev/null 2>&1 || true
+        ADHOC_ENV=""
+    fi
+}
+
+dump_diagnostics() {
+    local status="$1"
+    local project="${SMOKE_DIAG_PROJECT:-emailagent-dev}"
+    mkdir -p "$ROOT_DIR/artifacts" 2>/dev/null || true
+    {
+        echo "=== smoke failure diagnostics ==="
+        echo "timestamp_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+        echo "exit_status: ${status}"
+        echo "form: ${CURRENT_FORM:-unknown}"
+        echo "base_url: ${BASE_URL:-unset}"
+        echo "compose_project: ${project}"
+        echo
+        echo "--- docker compose version ---"
+        docker compose version 2>&1 || true
+        echo
+        echo "--- config --services (root form) ---"
+        docker compose -p "$project" config --services 2>&1 || true
+        echo
+        echo "--- config --services (-f form) ---"
+        docker compose -p "$project" -f docker/docker-compose.dev.yml --env-file .env config --services 2>&1 || true
+        echo
+        echo "--- compose ps -a ---"
+        docker compose -p "$project" ps -a 2>&1 || true
+        echo
+        echo "--- container state (whitelisted fields only) ---"
+        local cid
+        for cid in $(docker compose -p "$project" ps -aq 2>/dev/null || true); do
+            docker inspect --format 'name={{.Name}} status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} restarts={{.RestartCount}} image={{.Config.Image}} readonly_rootfs={{.HostConfig.ReadonlyRootfs}}' "$cid" 2>&1 || true
+        done
+        if [ -n "${ADHOC_CONTAINER:-}" ]; then
+            echo "ad-hoc probe container:"
+            docker inspect --format 'name={{.Name}} status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} restarts={{.RestartCount}} image={{.Config.Image}} readonly_rootfs={{.HostConfig.ReadonlyRootfs}}' "$ADHOC_CONTAINER" 2>&1 || true
+        fi
+        echo
+        echo "--- compose logs (tail 200) ---"
+        local svc
+        for svc in api postgres web; do
+            echo "##### service: ${svc} #####"
+            docker compose -p "$project" logs --no-color --tail=200 "$svc" 2>&1 || true
+        done
+    } >> "$ARTIFACT_LOG" 2>&1 || true
+    echo "SMOKE FAILED (exit ${status}); diagnostics: artifacts/smoke-failure.log" >&2 || true
+}
+
+on_exit() {
+    local status=$?
+    # Disarm the signal traps for teardown: a second INT/TERM/HUP arriving
+    # mid-dump (CI cancel escalation, double Ctrl-C) would re-enter
+    # exit 130/143 and abort the diagnostics + cleanup halfway. Ignore
+    # (trap - would restore the default disposition = die mid-write).
+    trap '' INT TERM HUP
+    set +e
+    if [ "$status" -ne 0 ] && [ "$DIAG_DONE" != "1" ]; then
+        DIAG_DONE=1
+        dump_diagnostics "$status"
+    fi
+    if declare -F cleanup >/dev/null 2>&1; then
+        cleanup
+    fi
+    exit "$status"
+}
+trap on_exit EXIT
+# Turn termination signals into a non-zero exit so the EXIT trap (diagnostics
+# + cleanup) still runs instead of the shell dying silently.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 # Prerequisites: jq (used for JSON/network/image inspection) and GNU sort -V.
 if ! command -v jq >/dev/null 2>&1; then
     echo "FAIL: 'jq' is required but not installed" >&2
@@ -63,20 +159,6 @@ if [ ! -f docker/certs/dev-selfsigned.crt ] || [ ! -f docker/certs/dev-selfsigne
     bash scripts/gen-dev-cert.sh
 fi
 
-ADHOC_CONTAINER=""
-ADHOC_ENV=""
-cleanup() {
-    if [ -n "${ADHOC_CONTAINER:-}" ]; then
-        docker rm -f "$ADHOC_CONTAINER" >/dev/null 2>&1 || true
-        ADHOC_CONTAINER=""
-    fi
-    if [ -n "${ADHOC_ENV:-}" ] && [ -f "${ADHOC_ENV:-}" ]; then
-        rm -f "$ADHOC_ENV" >/dev/null 2>&1 || true
-        ADHOC_ENV=""
-    fi
-}
-trap cleanup EXIT
-
 # Pre-clean our own project (volumes persist; no -v).
 docker compose -p emailagent-dev down >/dev/null 2>&1 || true
 
@@ -126,6 +208,7 @@ wait_postgres_healthy() {
 
 run_form() {
     local label="$1" run_neg2="$2"
+    CURRENT_FORM="$label"
     echo "===== FORM: $label ====="
 
     # --build: this script must validate THE CURRENT CHECKOUT — without it a
