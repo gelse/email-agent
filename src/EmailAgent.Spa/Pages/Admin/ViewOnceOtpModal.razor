@@ -1,0 +1,66 @@
+@inject OtpModalState State
+@inject IJSRuntime JS
+
+@* M1T8 / Q-A3 view-once OTP modal: the raw code exists only in the API
+   response that opened this modal. Closing records the value in the scoped
+   OtpModalState, so a parent re-render — or a remount after navigating away
+   and back — with the same OTP renders nothing. It can never be re-shown. *@
+@if (!State.IsDismissed(Otp))
+{
+    <div class="modal-backdrop">
+        <div class="modal otp-modal" role="dialog" aria-modal="true" aria-label="One-time sign-in code">
+            <h2>One-time sign-in code</h2>
+            <p class="otp-warning">This code will not be shown again.</p>
+            <p class="otp-value" id="view-once-otp">@Otp</p>
+            <p class="otp-expiry">Expires at @ExpiresAt.ToString("u")</p>
+
+            <div class="modal-actions">
+                <button type="button" class="btn-primary" id="otp-copy" @onclick="CopyAsync">
+                    Copy to clipboard
+                </button>
+                <button type="button" class="btn-secondary" id="otp-modal-close" @onclick="CloseAsync">Close</button>
+            </div>
+            @if (_status is not null)
+            {
+                <p class="otp-status" role="status">@_status</p>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>The raw one-time code — shown exactly once (Q-A3).</summary>
+    [Parameter, EditorRequired]
+    public required string Otp { get; set; }
+
+    /// <summary>Expiry from the create/reissue response.</summary>
+    [Parameter]
+    public DateTimeOffset ExpiresAt { get; set; }
+
+    /// <summary>Invoked after Close dismisses this OTP permanently.</summary>
+    [Parameter, EditorRequired]
+    public EventCallback OnClose { get; set; }
+
+    private string? _status;
+
+    private async Task CopyAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", Otp);
+            _status = "Copied to the clipboard.";
+        }
+        catch (JSException)
+        {
+            _status = "Copy failed — select the code and copy it manually.";
+        }
+    }
+
+    private async Task CloseAsync()
+    {
+        // View-once enforcement (client half): remember the dismissal so the
+        // same value can never render again in this session.
+        State.Dismiss(Otp);
+        await OnClose.InvokeAsync();
+    }
+}

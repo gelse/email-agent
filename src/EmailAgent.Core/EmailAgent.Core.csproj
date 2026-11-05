@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    M1T1 §5 domain shell. TargetFramework, Nullable, ImplicitUsings,
+    TreatWarningsAsErrors and InvariantGlobalization come from
+    Directory.Build.props.
+
+    M1T4: Logging.Abstractions is referenced so the audit writer's optional
+    startup chain check can log a structured error through ILogger without
+    pulling the full Microsoft.Extensions.Logging graph; it was already in the
+    transitive closure (Infrastructure's EF packages), so this pins an
+    existing dependency rather than adding a new one.
+  -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+  </ItemGroup>
+</Project>

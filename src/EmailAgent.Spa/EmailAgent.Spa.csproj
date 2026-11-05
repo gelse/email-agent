@@ -1,14 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
-
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
+  <!--
+    M0T3 SPA, completed by M1T1 (verify-and-extend — SQ-M0-9/Q-API43):
+    adds the §5 EmailAgent.Contracts reference. M1T8 (verify-and-extend):
+    fills in the auth screens — production-only package references (bUnit
+    lives in the test projects so test dependencies never ship in the WASM
+    bundle, task step 1). TargetFramework, Nullable, ImplicitUsings,
+    TreatWarningsAsErrors and InvariantGlobalization come from
+    Directory.Build.props.
+  -->
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="8.0.32" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="8.0.32" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="8.0.32" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <!-- JwtRoleParser parses (never verifies) the access token's role claim. -->
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="7.7.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="../EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
+  </ItemGroup>
 </Project>

@@ -101,3 +101,194 @@ a, .btn-link {
 code {
     color: #c02d76;
 }
+
+/* ------------------------------------------------------------------ *
+ * M1T8: auth cards, forms, admin table and modals — hand-written only  *
+ * (no component library in M1; task scope bullet on CSS).              *
+ * ------------------------------------------------------------------ */
+
+.auth-card {
+    width: 360px;
+    max-width: calc(100vw - 2rem);
+    margin: 10vh auto 2rem auto;
+    background: #fff;
+    border: 1px solid #dde3ea;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(20, 40, 70, 0.08);
+    padding: 1.5rem;
+}
+
+    .auth-card h1 {
+        font-size: 1.25rem;
+        margin-top: 0;
+    }
+
+    .auth-card .hint {
+        color: #5b6b7c;
+        font-size: 0.875rem;
+    }
+
+.form-field {
+    margin-bottom: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+    .form-field label {
+        font-size: 0.875rem;
+        color: #334155;
+    }
+
+.form-control {
+    padding: 0.5rem 0.6rem;
+    border: 1px solid #b6c2cf;
+    border-radius: 4px;
+    font-size: 1rem;
+    background: #fff;
+}
+
+.form-control.invalid {
+    border-color: #b91c1c;
+}
+
+.otp-input,
+.user-table .email-cell {
+    font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+}
+
+.btn-primary {
+    padding: 0.55rem 1rem;
+    border: none;
+    border-radius: 4px;
+    background: #1b6ec2;
+    color: #fff;
+    font-size: 0.9375rem;
+    cursor: pointer;
+}
+
+    .btn-primary:disabled {
+        opacity: 0.6;
+        cursor: default;
+    }
+
+.btn-secondary {
+    padding: 0.45rem 0.8rem;
+    border: 1px solid #b6c2cf;
+    border-radius: 4px;
+    background: #fff;
+    color: #1f2937;
+    font-size: 0.875rem;
+    cursor: pointer;
+}
+
+    .btn-secondary:disabled {
+        opacity: 0.5;
+        cursor: default;
+    }
+
+.error-box {
+    margin-top: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid #fca5a5;
+    border-radius: 4px;
+    background: #fef2f2;
+    color: #991b1b;
+    font-size: 0.875rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.toolbar {
+    display: flex;
+    gap: 0.5rem;
+    margin: 1rem 0;
+}
+
+.user-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border: 1px solid #dde3ea;
+    font-size: 0.875rem;
+}
+
+    .user-table th,
+    .user-table td {
+        text-align: left;
+        padding: 0.5rem 0.65rem;
+        border-bottom: 1px solid #eef2f6;
+    }
+
+    .user-table th {
+        background: #f3f6f9;
+        font-weight: 600;
+    }
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 12vh;
+    z-index: 50;
+}
+
+.modal {
+    background: #fff;
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    width: 420px;
+    max-width: calc(100vw - 2rem);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+}
+
+    .modal h2 {
+        margin-top: 0;
+        font-size: 1.1rem;
+    }
+
+.modal-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.otp-value {
+    font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+    font-size: 1.6rem;
+    letter-spacing: 0.15em;
+    font-weight: 600;
+    user-select: all;
+    margin: 0.5rem 0;
+}
+
+.otp-warning {
+    color: #9a3412;
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    border-radius: 4px;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.875rem;
+}
+
+.otp-expiry {
+    color: #5b6b7c;
+    font-size: 0.8125rem;
+}
+
+.otp-status {
+    color: #166534;
+    font-size: 0.875rem;
+}

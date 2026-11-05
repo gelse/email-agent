@@ -1,19 +1,41 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
-
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
+  <!--
+    M0T2 web host, completed by M1T1 (verify-and-extend — SQ-M0-9/Q-API43).
+    TargetFramework, Nullable, ImplicitUsings, TreatWarningsAsErrors and
+    InvariantGlobalization come from Directory.Build.props.
+  -->
 
   <ItemGroup>
+    <PackageReference Include="FluentValidation.AspNetCore" Version="11.3.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.32" />
+    <!-- M1T2 step 14: AddDbContextCheck<EmailAgentDbContext>(name: "db") —
+         the DbContext-backed readiness check that replaces M1T1's TCP ping. -->
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="8.0.32" />
+    <!-- Design-time assets for `dotnet ef` (startup project per M1T2 step 1);
+         compile assets are intentionally excluded by the standard pattern. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.32">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="7.7.3" />
     <PackageReference Include="Npgsql" Version="8.0.6" />
-    <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />
-    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.9.0-beta.2" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.9.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.9.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.9.0" />
-    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.9.0-beta.2" />
+    <!-- Acceptance criterion 4 requires process_runtime_* series at /metrics;
+         only this instrumentation emits them. -->
+    <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.9.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />
+    <PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="7.7.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="../EmailAgent.Core/EmailAgent.Core.csproj" />
+    <ProjectReference Include="../EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
+    <ProjectReference Include="../EmailAgent.Infrastructure/EmailAgent.Infrastructure.csproj" />
+  </ItemGroup>
 </Project>

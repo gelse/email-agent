@@ -1,7 +1,17 @@
 # auth questions
 
-| Status | Open questions: none |
+| Status | Open questions: none — Q-A13 resolved (see Resolutions) |
 |---|---|
 | Scope  | Login, OTPs, refresh tokens, 2FA, first-login flows, identity schema details, and the change-password re-login transition. |
 
 New questions for this category are recorded here per `AGENTS.md`. A question is kept until it is answered; once answered, the decision is recorded in the plan corpus (milestone summaries and `plans/01-architecture.md`) and the entry is removed.
+
+## Open questions
+
+- None.
+
+## Resolutions
+
+- **Q-A13 — Refresh cookie `Secure` attribute vs the plain-HTTP dev stack (recorded M1T6; answered on the M1 Q-A13 dispatch).** **Human's answer (verbatim):** "Q-A13: HTTP only for prod - we must assume external SSL-offloading (in our testing environment it will be traefik). But for dev we also need a self-signed cert to simulate." **Adopted decision (the original option (b), with the prod posture made explicit):** prod/testing run the API as plain HTTP **internally** only — TLS is terminated externally by a reverse proxy (traefik in the testing environment). The `ea_refresh` cookie therefore stays `Secure=true` unconditionally (M1T4's pinned contract and assertions unchanged; option (a) was rejected), and the API honours the edge's forwarded scheme via `UseForwardedHeaders` (`X-Forwarded-Proto` / `X-Forwarded-For`), so scheme-sensitive logic — the refresh-path Origin gate, rate-limit client IPs — sees `https` behind the edge. Dev simulates the same posture end to end: nginx terminates TLS on :443 with a throwaway self-signed certificate, plain HTTP from nginx to `api`, so a real browser stores the Secure cookie in dev exactly as in prod. **Implemented in:** `src/EmailAgent.Api/Program.cs` (forwarded headers early in the pipeline), `tests/EmailAgent.IntegrationTests/Auth/ForwardedHeadersTests.cs`, `docker/nginx.conf` + `docker/nginx-shared.conf` (dual :80/:443 listeners sharing one location config), `docker/Dockerfile` (web stage copies the shared config), `docker/docker-compose.dev.yml` (`WEB_HTTPS_PORT`, read-only cert mount), `scripts/gen-dev-cert.sh` (idempotent cert generator), `scripts/smoke-m1.sh` (end-to-end over `https://localhost:8443` with `curl -k`), `scripts/smoke.sh` (cert prerequisite), `src/EmailAgent.Spa/wwwroot/appsettings.json` + `src/EmailAgent.Spa/Program.cs` (`ApiBaseUrl` = the HTTPS edge), `.env.example`, `README.md`, `.gitignore`/`.dockerignore` (`docker/certs/` git-ignored). Evidence: `reports/m1-q-a13-resolution.md`.
+
+- **Q-A11 — Identity housekeeping columns on `users` (M1T4 step 1).** ASP.NET Core Identity requires `user_name`, `normalized_user_name`, `email_confirmed`, `normalized_email`, `security_stamp`, `concurrency_stamp`, `phone_number`, `phone_number_confirmed`, `two_factor_enabled`, `lockout_end`, `lockout_enabled` and `access_failed_count` in addition to §6's `password_hash` / `email`. These columns are **additive** (no §6 column is removed or renamed) and are created by migration `20261023112401_IdentitySchema` (the task file's `00000000000001_IdentitySchema` placeholder, scaffolded with the standard timestamp via `dotnet ef migrations add IdentitySchema`). Implemented: `User : IdentityUser<Guid>` (`src/EmailAgent.Infrastructure/Entities/User.cs`) + mappings in `Configurations/UserConfiguration.cs`. Recorded here because §6 does not list them (task step 1 / Risks).

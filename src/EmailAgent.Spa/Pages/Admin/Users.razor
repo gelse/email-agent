@@ -1,0 +1,215 @@
+@page "/admin/users"
+@attribute [Authorize(Roles = "Admin")]
+@inject HttpClient Api
+@inject TokenStore TokenStore
+@inject JwtRoleParser RoleParser
+@inject NavigationManager Nav
+@inject OtpModalState OtpState
+
+<PageTitle>Users — Email Agent</PageTitle>
+
+<h1>Users</h1>
+
+@if (_error is not null)
+{
+    <div class="error-box" role="alert">@_error</div>
+}
+
+<div class="toolbar">
+    <button type="button" class="btn-primary" id="create-user-open" @onclick="OpenCreateDialog">Create user</button>
+    <button type="button" class="btn-secondary" disabled="@(_prevCursors.Count == 0 || _loading)"
+            @onclick="PreviousPageAsync">Previous</button>
+    <button type="button" class="btn-secondary" disabled="@(_nextCursor is null || _loading)"
+            @onclick="NextPageAsync">Next</button>
+</div>
+
+@if (_loading)
+{
+    <p>Loading…</p>
+}
+else if (_users.Count == 0)
+{
+    <p>No users to show.</p>
+}
+else
+{
+    <table class="user-table">
+        <thead>
+            <tr>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>MustChangePassword</th>
+                <th>CreatedAt</th>
+                <th>LastLoginAt</th>
+                <th><span class="visually-hidden">Actions</span></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var user in _users)
+            {
+                <tr @key="user.Id">
+                    <td>@user.Email</td>
+                    <td>@user.Role</td>
+                    <td>@user.Status</td>
+                    <td>@(user.MustChangePassword ? "yes" : "no")</td>
+                    <td>@user.CreatedAt.ToString("u")</td>
+                    <td>@(user.LastLoginAt is null ? "—" : user.LastLoginAt.Value.ToString("u"))</td>
+                    <td>
+                        <button type="button" class="btn-secondary"
+                                @onclick="() => ReissueOtpAsync(user)">Reissue OTP</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if (_showCreate)
+{
+    <CreateUserDialog OnCancel="CloseCreateDialog" OnCreated="HandleCreatedAsync" />
+}
+
+@if (_pendingOtp is not null)
+{
+    <ViewOnceOtpModal Otp="@_pendingOtp.Value.Otp"
+                      ExpiresAt="@_pendingOtp.Value.ExpiresAt"
+                      OnClose="CloseOtpModal" />
+}
+
+@code {
+    private List<UserSummary> _users = new();
+    private string? _nextCursor;
+    private string? _currentCursor;
+    private readonly Stack<string?> _prevCursors = new();
+    private bool _loading;
+    private bool _showCreate;
+    private string? _error;
+    private (string Otp, DateTimeOffset ExpiresAt)? _pendingOtp;
+
+    /// <summary>
+    /// Task step 12: client-side Admin gate first (the JWT role claim is the
+    /// routing source of truth in the SPA — no API call for authorization),
+    /// then GET /v1/admin/users (cursor-paged, §13.13). A 401/403 from the
+    /// API (disabled account, stale role) redirects to /account/login.
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        var token = TokenStore.AccessToken;
+        var roles = token is null
+            ? Array.Empty<string>()
+            : RoleParser.GetRoles(token);
+        if (!roles.Contains("Admin"))
+        {
+            Nav.NavigateTo("/account/login");
+            return;
+        }
+
+        await LoadPageAsync(cursor: null);
+    }
+
+    private async Task LoadPageAsync(string? cursor)
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            var url = cursor is null
+                ? "/v1/admin/users?limit=25"
+                : $"/v1/admin/users?limit=25&cursor={Uri.EscapeDataString(cursor)}";
+
+            using var response = await Api.GetAsync(url);
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                Nav.NavigateTo("/account/login");
+                return;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ProblemReader.ReadAsync(response);
+                return;
+            }
+
+            var page = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummary>>();
+            _users = page?.Items ?? new List<UserSummary>();
+            _nextCursor = page?.NextCursor;
+            _currentCursor = cursor;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task NextPageAsync()
+    {
+        if (_nextCursor is null || _loading)
+        {
+            return;
+        }
+
+        _prevCursors.Push(_currentCursor);
+        await LoadPageAsync(_nextCursor);
+    }
+
+    private async Task PreviousPageAsync()
+    {
+        if (_prevCursors.Count == 0 || _loading)
+        {
+            return;
+        }
+
+        await LoadPageAsync(_prevCursors.Pop());
+    }
+
+    private void OpenCreateDialog() => _showCreate = true;
+
+    private void CloseCreateDialog() => _showCreate = false;
+
+    private async Task HandleCreatedAsync(CreateUserResponse created)
+    {
+        // The 201 body carries the OTP exactly once (Q-A3): show it in the
+        // view-once modal and refresh the list so the new Pending row appears.
+        _showCreate = false;
+        _pendingOtp = (created.Otp, created.OtpExpiresAt);
+        await LoadPageAsync(_currentCursor);
+    }
+
+    private async Task ReissueOtpAsync(UserSummary user)
+    {
+        _error = null;
+        try
+        {
+            using var response = await Api.PostAsync(
+                $"/v1/admin/users/{user.Id}/otp", new ByteArrayContent(Array.Empty<byte>()));
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                Nav.NavigateTo("/account/login");
+                return;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ProblemReader.ReadAsync(response);
+                return;
+            }
+
+            var otp = await response.Content.ReadFromJsonAsync<OtpResponse>();
+            if (otp is not null)
+            {
+                _pendingOtp = (otp.Otp, otp.OtpExpiresAt);
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+    }
+
+    private void CloseOtpModal() => _pendingOtp = null;
+}

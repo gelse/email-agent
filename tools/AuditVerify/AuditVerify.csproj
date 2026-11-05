@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    M1T1 §5 console tool; the real implementation ships in M1T9
+    (plans/implementation/M1T9-m1-end-to-end-integration-and-verification.md).
+    TargetFramework, Nullable, ImplicitUsings, TreatWarningsAsErrors and
+    InvariantGlobalization come from Directory.Build.props.
+
+    EmailAgent.Infrastructure brings the canonical AuditHmacChain helper
+    (SQ-2 / Q-O10) so the writer and the verifier share one serializer and
+    cannot drift; Npgsql comes transitively via
+    Npgsql.EntityFrameworkCore.PostgreSQL.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <!-- M1T9: EmailAgent.UnitTests targets the internal AuditChainVerifier
+       (the exact chain walk the CLI runs) instead of a drifting copy. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="EmailAgent.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/EmailAgent.Infrastructure/EmailAgent.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

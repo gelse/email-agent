@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    M1T1 §5 integration-test project: WebApplicationFactory<Program> +
+    Testcontainers Postgres. TargetFramework, Nullable, ImplicitUsings,
+    TreatWarningsAsErrors and InvariantGlobalization come from
+    Directory.Build.props.
+  -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- M1T8: bUnit for AuthFlowIntegrationTests (SPA pages over the real host). -->
+    <PackageReference Include="bunit" Version="1.40.0" />
+    <PackageReference Include="bunit.web" Version="1.40.0" />
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.32" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.16.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/EmailAgent.Api/EmailAgent.Api.csproj" />
+    <ProjectReference Include="../../src/EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
+    <ProjectReference Include="../../src/EmailAgent.Infrastructure/EmailAgent.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/EmailAgent.Spa/EmailAgent.Spa.csproj" />
+  </ItemGroup>
+</Project>

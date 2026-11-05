@@ -1,5 +1,8 @@
 <Project>
+  <!-- M1T1: central cross-cutting compiler settings for every project in the
+       solution (§5 layout). Individual csproj files do not repeat these. -->
   <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

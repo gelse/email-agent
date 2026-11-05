@@ -41,4 +41,9 @@ CMD ["dotnet", "EmailAgent.Api.dll"]
 # ---- Stage 4: web (nginx + SPA payload) ----
 FROM nginx:alpine AS web
 COPY --from=spa /app/spa/wwwroot /usr/share/nginx/html
+# Q-A13: default.conf holds the :80 and :443 server blocks; the shared
+# server-level config (locations/proxy) is included by both so they cannot
+# drift. The TLS material is NOT baked in — it is bind-mounted from
+# docker/certs at run time (scripts/gen-dev-cert.sh).
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/nginx-shared.conf /etc/nginx/snippets/shared-server.conf

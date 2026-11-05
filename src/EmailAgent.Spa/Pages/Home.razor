@@ -1,7 +1,28 @@
 @page "/"
+@inject TokenStore TokenStore
+@inject JwtRoleParser RoleParser
+@inject NavigationManager Nav
 
-<PageTitle>EmailAgent</PageTitle>
+@* M1T8: role-based landing route (task routing bullet 3) — Admins land on
+   /admin/users, everyone else on the M1 dashboard stub; anonymous visitors
+   go to /account/login. *@
+@code {
+    protected override void OnInitialized()
+    {
+        var token = TokenStore.AccessToken;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            Nav.NavigateTo("/account/login");
+            return;
+        }
 
-<h1>EmailAgent</h1>
-
-<p>Stub index page.</p>
+        if (RoleParser.GetRoles(token).Contains("Admin"))
+        {
+            Nav.NavigateTo("/admin/users");
+        }
+        else
+        {
+            Nav.NavigateTo("/dashboard");
+        }
+    }
+}

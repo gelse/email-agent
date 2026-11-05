@@ -17,6 +17,11 @@ out/
 appsettings.Local.json
 /data/blobs
 
+# Dev TLS material (Q-A13): throwaway self-signed cert from
+# scripts/gen-dev-cert.sh — never commit cert/key material.
+docker/certs/*
+!docker/certs/.gitkeep
+
 # Test / coverage
 coverage/
 TestResults/

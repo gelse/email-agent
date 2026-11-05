@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    M1T1 §5 contracts shell (shared between EmailAgent.Api and EmailAgent.Spa).
+    TargetFramework, Nullable, ImplicitUsings, TreatWarningsAsErrors and
+    InvariantGlobalization are enforced centrally in Directory.Build.props.
+  -->
+</Project>

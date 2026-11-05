@@ -29,6 +29,9 @@ if [ ! -f .env ]; then
     sed -i 's/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci-throwaway-postgres-password/' .env
     sed -i 's/^AUTH__SigningKey=$/AUTH__SigningKey=ci-throwaway-signing-key-not-a-real-secret-32chars/' .env
     sed -i 's/^system_kek=$/system_kek=ci-throwaway-system-kek/' .env
+    # M1T1+: Audit:HmacKey is ValidateOnStart for the api service — without
+    # this fill the fresh-bootstrap path dies before the first /health/ready.
+    sed -i 's/^AUDIT__HmacKey=$/AUDIT__HmacKey=ci-throwaway-audit-hmac-key-0123456789abcdef/' .env
     sed -i 's|^ConnectionStrings__Postgres=$|ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=emailagent;Username=emailagent;Password=ci-throwaway-postgres-password|' .env
     # Throwaway credentials can never authenticate against an already-initialized
     # emailagent-dev cluster (POSTGRES_PASSWORD applies only at first init and
@@ -44,12 +47,21 @@ if [ ! -f .env ]; then
         exit 1
     fi
 fi
-for k in POSTGRES_PASSWORD AUTH__SigningKey system_kek ConnectionStrings__Postgres; do
+for k in POSTGRES_PASSWORD AUTH__SigningKey system_kek ConnectionStrings__Postgres AUDIT__HmacKey; do
     if ! grep -Eq "^${k}=.+" .env; then
         echo "FAIL: .env has no value for $k" >&2
         exit 1
     fi
 done
+
+# Q-A13: the web container's nginx edge only starts when its (git-ignored)
+# TLS material exists — generate the throwaway dev certificate once for this
+# checkout. Probes below keep using the plain-HTTP listener (WEB_PORT); the
+# HTTPS edge is exercised by scripts/smoke-m1.sh.
+if [ ! -f docker/certs/dev-selfsigned.crt ] || [ ! -f docker/certs/dev-selfsigned.key ]; then
+    echo "Generating dev TLS certificate (scripts/gen-dev-cert.sh)..."
+    bash scripts/gen-dev-cert.sh
+fi
 
 ADHOC_CONTAINER=""
 ADHOC_ENV=""
@@ -116,16 +128,23 @@ run_form() {
     local label="$1" run_neg2="$2"
     echo "===== FORM: $label ====="
 
+    # --build: this script must validate THE CURRENT CHECKOUT — without it a
+    # stale local web/api image (e.g. pre-Q-A13 nginx) would be smoked
+    # instead of the tree's. CI runners have no cached image, so there the
+    # build happens either way.
     if [ "$label" = "root" ]; then
-        docker compose -p emailagent-dev up -d --wait
+        docker compose -p emailagent-dev up -d --build --wait
     else
-        docker compose -p emailagent-dev -f docker/docker-compose.dev.yml --env-file .env up -d --wait
+        docker compose -p emailagent-dev -f docker/docker-compose.dev.yml --env-file .env up -d --build --wait
     fi
 
-    # Derive the host port from the running project (honours API_PORT).
-    PORT="$(docker compose -p emailagent-dev port api 8080 2>/dev/null | sed -n 's/.*://p')"
+    # M1T8: the api service is no longer host-published — probes go through
+    # the web container's nginx (same-origin topology: it reverse-proxies
+    # /v1/*, /health/* and /metrics, and serves the SPA on :8081). Honours
+    # WEB_PORT from .env via compose's own interpolation of `ports:`.
+    PORT="$(docker compose -p emailagent-dev port web 80 2>/dev/null | sed -n 's/.*://p')"
     if [ -z "$PORT" ]; then
-        PORT=8080
+        PORT=8081
     fi
     BASE_URL="http://localhost:${PORT}"
 
@@ -196,14 +215,39 @@ run_form() {
         fi
         api_image="$(docker inspect "$api_cid" | jq -r '.[0].Config.Image')"
         api_net="$(docker inspect "$api_cid" | jq -r '.[0].NetworkSettings.Networks | keys[0]')"
-        conn_str="$(docker inspect "$api_cid" | jq -r '.[0].Config.Env[]' | sed -n 's/^ConnectionStrings__Postgres=//p')"
-        if [ -z "$conn_str" ]; then
-            conn_str="$(sed -n 's/^ConnectionStrings__Postgres=//p' .env)"
+        # M1T1: the api service's connection string is materialized inside the
+        # container by docker/entrypoint.sh from the postgres Docker secret, so
+        # it no longer exists in the container's Config.Env. Derive the ad-hoc
+        # probe's connection string from the same secret; fall back to
+        # Config.Env (pre-M1T1 images) and then to .env. The secret-derived
+        # value always matches the running server, so a .env connection-string
+        # line drifting from POSTGRES_PASSWORD cannot cause a false failure.
+        local pg_password=""
+        pg_password="$(docker compose -p emailagent-dev exec -T postgres sh -c 'cat /run/secrets/postgres_password' 2>/dev/null | tr -d '\r\n' || true)"
+        if [ -n "$pg_password" ]; then
+            conn_str="Host=postgres;Port=5432;Database=emailagent;Username=emailagent;Password=${pg_password}"
+        else
+            echo "WARN: could not read the postgres secret; falling back to Config.Env/.env for the ad-hoc probe connection string" >&2
+            conn_str="$(docker inspect "$api_cid" | jq -r '.[0].Config.Env[]' | sed -n 's/^ConnectionStrings__Postgres=//p')"
+            if [ -z "$conn_str" ]; then
+                conn_str="$(sed -n 's/^ConnectionStrings__Postgres=//p' .env)"
+            fi
         fi
 
         ADHOC_ENV="$(mktemp)"
         chmod 600 "$ADHOC_ENV"
+        # The ad-hoc container runs the image's plain CMD (no compose-level
+        # entrypoint), so docker/entrypoint.sh never materializes the M1
+        # secrets and the app's ValidateOnStart validators (System:KeyEncryption
+        # / Audit:HmacKey / Auth:SigningKey — M1T3/M1T4) would kill it before
+        # the probe. Feed them from .env (throwaway dev values, file mode 600,
+        # container removed below) exactly as the compose `api` service gets
+        # them. Pre-existing M1T4 drift in this M0-era smoke, surfaced by the
+        # Q-A13 run of this script.
         printf 'ConnectionStrings__Postgres=%s\nBlobs__Path=/root/locked\n' "$conn_str" > "$ADHOC_ENV"
+        printf 'AUDIT__HmacKey=%s\n' "$(grep '^AUDIT__HmacKey=' .env | cut -d= -f2-)" >> "$ADHOC_ENV"
+        printf 'AUTH__SigningKey=%s\n' "$(grep '^AUTH__SigningKey=' .env | cut -d= -f2-)" >> "$ADHOC_ENV"
+        printf 'SYSTEM__KeyEncryptionKey=%s\n' "$(grep '^system_kek=' .env | cut -d= -f2-)" >> "$ADHOC_ENV"
 
         ADHOC_CONTAINER="$(docker run -d --network "$api_net" --env-file "$ADHOC_ENV" "$api_image")"
 

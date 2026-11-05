@@ -1,0 +1,130 @@
+@page "/account/login"
+@inject HttpClient Api
+@inject TokenStore TokenStore
+@inject JwtRoleParser RoleParser
+@inject NavigationManager Nav
+
+<PageTitle>Sign in — Email Agent</PageTitle>
+
+<div class="auth-card">
+    <h1>Sign in</h1>
+
+    <EditForm Model="@_model" OnValidSubmit="@SubmitAsync" FormName="login">
+        <DataAnnotationsValidator />
+        <div class="form-field">
+            <label for="email">Email</label>
+            <InputText id="email" class="form-control" @bind-Value="_model.Email"
+                       autocomplete="username" />
+            <ValidationMessage For="@(() => _model.Email)" />
+        </div>
+        <div class="form-field">
+            <label for="password">Password</label>
+            <InputText id="password" type="password" class="form-control"
+                       @bind-Value="_model.Password" autocomplete="current-password" />
+            <ValidationMessage For="@(() => _model.Password)" />
+        </div>
+        <button type="submit" class="btn-primary" disabled="@_busy">
+            @(_busy ? "Signing in…" : "Sign in")
+        </button>
+        @if (_error is not null)
+        {
+            <div class="error-box" role="alert">@_error</div>
+        }
+    </EditForm>
+
+    <p class="hint">
+        First time here? <a href="/account/otp-login">Sign in with a one-time code</a>
+    </p>
+</div>
+
+@code {
+    private readonly LoginModel _model = new();
+    private string? _error;
+    private bool _busy;
+
+    /// <summary>
+    /// POST /v1/account/login (form-encoded per the API contract). Success
+    /// stores the access token in memory and routes: first-login flow →
+    /// /account/change-password; otherwise /admin/users for Admin, else the
+    /// M1 /dashboard stub (task step 10 / M1 scope bullet 13).
+    /// </summary>
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            using var content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["email"] = _model.Email ?? string.Empty,
+                ["password"] = _model.Password ?? string.Empty,
+            });
+
+            using var response = await Api.PostAsync("/v1/account/login", content);
+            if (!response.IsSuccessStatusCode)
+            {
+                // RFC 7807 (401 bad credentials, 403 disabled, 429 budget…).
+                _error = await ProblemReader.ReadAsync(response);
+                return;
+            }
+
+            var token = await response.Content.ReadFromJsonAsync<TokenResponse>();
+            if (string.IsNullOrWhiteSpace(token?.AccessToken))
+            {
+                _error = "The server returned an unexpected response.";
+                return;
+            }
+
+            TokenStore.SessionEmail = _model.Email;
+            TokenStore.Set(token.AccessToken);
+
+            // must_complete_first_login: body flag OR X-Login-State header
+            // (both spell the same formula server-side).
+            var firstLogin = token.MustCompleteFirstLogin == true
+                || response.Headers.Contains("X-Login-State");
+            TokenStore.NeedsPassphraseSetup = firstLogin;
+
+            if (firstLogin)
+            {
+                Nav.NavigateTo("/account/change-password");
+            }
+            else if (RoleParser.GetRoles(token.AccessToken).Contains("Admin"))
+            {
+                Nav.NavigateTo("/admin/users");
+            }
+            else
+            {
+                Nav.NavigateTo("/dashboard");
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        catch (OperationCanceledException)
+        {
+            // HttpClient.Timeout on a wedged connection — same operator-facing
+            // outcome as an unreachable API (RefreshCookieAuthenticator does
+            // the same on the cookie path).
+            _error = "Could not reach the API.";
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            _error = "The server returned an unexpected response.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class LoginModel
+    {
+        [Required(ErrorMessage = "The Email field is required.")]
+        [EmailAddress(ErrorMessage = "The Email field is not a valid email address.")]
+        public string? Email { get; set; }
+
+        [Required(ErrorMessage = "The Password field is required.")]
+        public string? Password { get; set; }
+    }
+}

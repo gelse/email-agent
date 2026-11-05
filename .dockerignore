@@ -21,6 +21,10 @@
 /data/
 data/
 
+# Dev TLS material (Q-A13) is bind-mounted at run time, never baked into an
+# image layer (`COPY . .` in the build stage would otherwise pick it up).
+docker/certs/
+
 # Docs and plans are not needed to build the images
 plans/
 

@@ -1,77 +1,47 @@
 .page {
-    position: relative;
+    min-height: 100vh;
     display: flex;
     flex-direction: column;
+    background: #f6f7f9;
 }
 
-main {
-    flex: 1;
-}
-
-.sidebar {
-    background-image: linear-gradient(180deg, rgb(5, 39, 103) 0%, #3a0647 70%);
-}
-
-.top-row {
-    background-color: #f7f7f7;
-    border-bottom: 1px solid #d6d5d5;
-    justify-content: flex-end;
-    height: 3.5rem;
+.topbar {
     display: flex;
     align-items: center;
+    gap: 1.5rem;
+    padding: 0.6rem 1.25rem;
+    background: #1b2a3a;
+    color: #fff;
 }
 
-    .top-row ::deep a, .top-row ::deep .btn-link {
-        white-space: nowrap;
-        margin-left: 1.5rem;
+    .topbar .brand {
+        font-weight: 600;
+        color: #fff;
         text-decoration: none;
+        letter-spacing: 0.02em;
     }
 
-    .top-row ::deep a:hover, .top-row ::deep .btn-link:hover {
-        text-decoration: underline;
-    }
-
-    .top-row ::deep a:first-child {
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-@media (max-width: 640.98px) {
-    .top-row {
-        justify-content: space-between;
-    }
-
-    .top-row ::deep a, .top-row ::deep .btn-link {
-        margin-left: 0;
-    }
+.topbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
 }
 
-@media (min-width: 641px) {
-    .page {
-        flex-direction: row;
-    }
+.user-email {
+    font-size: 0.875rem;
+    color: #cdd7e1;
+}
 
-    .sidebar {
-        width: 250px;
-        height: 100vh;
-        position: sticky;
-        top: 0;
-    }
+.logout-link {
+    color: #fff;
+    font-size: 0.875rem;
+}
 
-    .top-row {
-        position: sticky;
-        top: 0;
-        z-index: 1;
-    }
-
-    .top-row.auth ::deep a:first-child {
-        flex: 1;
-        text-align: right;
-        width: 0;
-    }
-
-    .top-row, article {
-        padding-left: 2rem !important;
-        padding-right: 1.5rem !important;
-    }
+.content {
+    flex: 1;
+    padding: 1.5rem 1.25rem;
+    max-width: 1100px;
+    width: 100%;
+    margin: 0 auto;
 }

@@ -1,4 +1,6 @@
-# Canonical dev compose (M0T4). Relative paths resolve from this file's directory (docker/).
+# Canonical dev compose (M0T4; extended by M1T1 — verify-and-extend per
+# SQ-M0-9/Q-API43: M1-specific wiring only, see plans/implementation/M1T1).
+# Relative paths resolve from this file's directory (docker/).
 # Consumed via root docker-compose.yml (include:) and directly with
 # `docker compose -f docker/docker-compose.dev.yml --env-file .env`.
 
@@ -8,7 +10,10 @@ services:
     environment:
       POSTGRES_USER: emailagent
       POSTGRES_DB: emailagent
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # M1T1 step 8: the official Postgres image's `*_FILE` indirection cats
+      # the mounted Docker secret and exports it as POSTGRES_PASSWORD. This
+      # indirection is Postgres-image-specific, not application-level.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U emailagent -d emailagent"]
       interval: 10s
@@ -17,19 +22,25 @@ services:
       start_period: 30s
     volumes:
       - pg_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
 
   api:
     build:
       context: ..
       dockerfile: docker/Dockerfile
       target: api-runtime
+    # M1T1 step 8: materialize /run/secrets/* into the §16 environment
+    # variables before the process starts (docker/entrypoint.sh).
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
     environment:
-      ConnectionStrings__Postgres: ${ConnectionStrings__Postgres}
       Blobs__Path: /data/blobs
     volumes:
       - blobs:/data/blobs
-    ports:
-      - "${API_PORT:-8080}:8080"
+      - ./entrypoint.sh:/entrypoint.sh:ro
+    # M1T8 (§13.9 same-origin topology): NOT host-published in dev — the web
+    # container's nginx reverse-proxies /v1/*, /health/* and /metrics on
+    # localhost:8081; api is reachable only via the internal Docker network.
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8080/health/ready"]
       interval: 10s
@@ -42,6 +53,7 @@ services:
     secrets:
       - postgres_password
       - AUTH__SigningKey
+      - AUDIT__HmacKey
       - system_kek
 
   web:
@@ -49,9 +61,31 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       target: web
-    # Not host-published at M0; reachable on the compose network only (SPA served
-    # by nginx; api is the only host-exposed service).
+    # M1T8/Q-A13: the only host-published service — SPA at
+    # https://localhost:8443 (dev TLS edge, self-signed) with /v1/*,
+    # /health/* and /metrics proxied to api (same origin, so the ea_refresh
+    # cookie flows without any CORS configuration); the plain-HTTP listener
+    # stays published for health/metrics tooling and the container-internal
+    # healthcheck. The api service itself publishes no host port.
+    #
+    # Prerequisite (Q-A13): nginx refuses to start without its certificate —
+    # run `bash scripts/gen-dev-cert.sh` once before `up` to generate the
+    # throwaway self-signed pair in docker/certs (git-ignored). There is
+    # deliberately no in-image fallback: the cert is host-side dev material
+    # a developer can inspect and (if wanted) trust, and a missing cert must
+    # fail loudly rather than silently serve a different one.
+    ports:
+      - "${WEB_PORT:-8081}:80"
+      - "${WEB_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
+    # Start api first so nginx can resolve the `api` upstream name (the
+    # container must exist on the compose network when the config loads).
+    depends_on:
+      - api
     healthcheck:
+      # Container-internal plain HTTP on :80 — independent of the dev TLS
+      # cert (must keep working regardless of docker/certs).
       test: ["CMD", "wget", "-qO-", "http://localhost/health/live"]
       interval: 10s
       timeout: 5s
@@ -63,6 +97,10 @@ secrets:
     environment: POSTGRES_PASSWORD
   AUTH__SigningKey:
     environment: AUTH__SigningKey
+  AUDIT__HmacKey:
+    environment: AUDIT__HmacKey
+  # M0 name kept (system_kek, §17); materialized as SYSTEM__KeyEncryptionKey
+  # by docker/entrypoint.sh (§16 / Q-E7).
   system_kek:
     environment: system_kek
 

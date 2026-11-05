@@ -1,12 +1,21 @@
 ﻿@inherits LayoutComponentBase
-<div class="page">
-    <div class="sidebar">
-        <NavMenu />
-    </div>
 
-    <main>
-        <article class="content px-4">
-            @Body
-        </article>
+@* M1T8: minimal top-bar layout — brand, role-gated nav, signed-in email and
+   logout link (no component library in M1). *@
+<div class="page">
+    <header class="topbar">
+        <a class="brand" href="/">Email Agent</a>
+        <NavMenu />
+        <div class="topbar-right">
+            <AuthorizeView>
+                <Authorized>
+                    <span class="user-email">@context.User.Identity?.Name</span>
+                    <a class="logout-link" href="/account/logout">Log out</a>
+                </Authorized>
+            </AuthorizeView>
+        </div>
+    </header>
+    <main class="content">
+        @Body
     </main>
 </div>

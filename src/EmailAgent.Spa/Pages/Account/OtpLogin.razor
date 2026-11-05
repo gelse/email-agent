@@ -1,0 +1,108 @@
+@page "/account/otp-login"
+@inject HttpClient Api
+@inject TokenStore TokenStore
+@inject NavigationManager Nav
+
+<PageTitle>One-time sign in — Email Agent</PageTitle>
+
+<div class="auth-card">
+    <h1>Sign in with a one-time code</h1>
+
+    <EditForm Model="@_model" OnValidSubmit="@SubmitAsync" FormName="otp-login">
+        <DataAnnotationsValidator />
+        <div class="form-field">
+            <label for="otp-email">Email</label>
+            <InputText id="otp-email" class="form-control" @bind-Value="_model.Email"
+                       autocomplete="username" />
+            <ValidationMessage For="@(() => _model.Email)" />
+        </div>
+        <div class="form-field">
+            <label for="otp">One-time code</label>
+            <InputText id="otp" class="form-control otp-input" @bind-Value="_model.Otp"
+                       autocomplete="one-time-code" inputmode="latin" />
+            <ValidationMessage For="@(() => _model.Otp)" />
+        </div>
+        <button type="submit" class="btn-primary" disabled="@_busy">
+            @(_busy ? "Verifying…" : "Verify and sign in")
+        </button>
+        @if (_error is not null)
+        {
+            <div class="error-box" role="alert">@_error</div>
+        }
+    </EditForm>
+
+    <p class="hint">
+        Have a password? <a href="/account/login">Sign in with your password</a>
+    </p>
+</div>
+
+@code {
+    private readonly OtpLoginModel _model = new();
+    private string? _error;
+    private bool _busy;
+
+    /// <summary>
+    /// POST /v1/account/otp-login (form-encoded). On success the first-login
+    /// flow is always next (the endpoint forces must_change_password and the
+    /// DEK does not exist yet — Q-E6), so the SPA routes to
+    /// /account/change-password (task step 5).
+    /// </summary>
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            using var content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["email"] = _model.Email ?? string.Empty,
+                ["otp"] = _model.Otp ?? string.Empty,
+            });
+
+            using var response = await Api.PostAsync("/v1/account/otp-login", content);
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ProblemReader.ReadAsync(response);
+                return;
+            }
+
+            var token = await response.Content.ReadFromJsonAsync<TokenResponse>();
+            if (string.IsNullOrWhiteSpace(token?.AccessToken))
+            {
+                _error = "The server returned an unexpected response.";
+                return;
+            }
+
+            TokenStore.SessionEmail = _model.Email;
+            TokenStore.Set(token.AccessToken);
+            TokenStore.NeedsPassphraseSetup = true;
+            Nav.NavigateTo("/account/change-password");
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        catch (OperationCanceledException)
+        {
+            _error = "Could not reach the API.";
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            _error = "The server returned an unexpected response.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class OtpLoginModel
+    {
+        [Required(ErrorMessage = "The Email field is required.")]
+        [EmailAddress(ErrorMessage = "The Email field is not a valid email address.")]
+        public string? Email { get; set; }
+
+        [Required(ErrorMessage = "The one-time code is required.")]
+        public string? Otp { get; set; }
+    }
+}

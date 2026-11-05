@@ -1,0 +1,25 @@
+@using Microsoft.AspNetCore.Components.Authorization
+@inject NavigationManager Navigation
+@inject RefreshCookieAuthenticator Authenticator
+@inject TokenStore TokenStore
+
+@* M1T8: rendered by App.razor's <NotAuthorized> when an [Authorize]-gated
+   route is reached with no in-memory token (page reload, deep link). One
+   silent refresh attempt — the httpOnly ea_refresh cookie still being valid
+   restores the session in place (TokenStore.Changed re-evaluates the route);
+   failure routes to /account/login. *@
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        if (TokenStore.AccessToken is null)
+        {
+            var restored = await Authenticator.AttemptSilentRefreshAsync();
+            if (restored)
+            {
+                return; // auth state changed; the route view re-renders
+            }
+        }
+
+        Navigation.NavigateTo("/account/login");
+    }
+}

@@ -1,0 +1,35 @@
+@page "/account/logout"
+@inject HttpClient Api
+@inject TokenStore TokenStore
+@inject NavigationManager Nav
+
+<PageTitle>Signing out — Email Agent</PageTitle>
+
+<p>Signing out…</p>
+
+@code {
+    /// <summary>
+    /// On first render: POST /v1/account/logout (the API revokes the refresh
+    /// token and clears the ea_refresh cookie), then clear the in-memory
+    /// token store and route to /account/login (task scope bullet 5). A
+    /// network failure still signs the SPA out locally — the token store is
+    /// never left populated on this page.
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            using var response = await Api.PostAsync(
+                "/v1/account/logout", new ByteArrayContent(Array.Empty<byte>()));
+        }
+        catch (HttpRequestException)
+        {
+            // Offline / unreachable API — proceed with the local sign-out.
+        }
+        finally
+        {
+            TokenStore.Clear();
+            Nav.NavigateTo("/account/login");
+        }
+    }
+}

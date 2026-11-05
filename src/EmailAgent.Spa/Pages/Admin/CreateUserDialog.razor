@@ -1,0 +1,96 @@
+@inject HttpClient Api
+
+@* M1T8: modal create-user form (task scope bullet 4) — Email + Role select;
+   POST /v1/admin/users, then the parent renders the OTP from the 201 body. *@
+<div class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Create user">
+        <h2>Create user</h2>
+
+        <EditForm Model="@_model" OnValidSubmit="@SubmitAsync" FormName="create-user">
+            <DataAnnotationsValidator />
+            <div class="form-field">
+                <label for="create-email">Email</label>
+                <InputText id="create-email" class="form-control" @bind-Value="_model.Email" />
+                <ValidationMessage For="@(() => _model.Email)" />
+            </div>
+            <div class="form-field">
+                <label for="create-role">Role</label>
+                <InputSelect id="create-role" class="form-control" @bind-Value="_model.Role">
+                    <option value="User">User</option>
+                    <option value="Admin">Admin</option>
+                </InputSelect>
+                <ValidationMessage For="@(() => _model.Role)" />
+            </div>
+            <div class="modal-actions">
+                <button type="submit" class="btn-primary" id="create-user-submit" disabled="@_busy">
+                    @(_busy ? "Creating…" : "Create user")
+                </button>
+                <button type="button" class="btn-secondary" id="create-user-cancel" @onclick="OnCancel">Cancel</button>
+            </div>
+            @if (_error is not null)
+            {
+                <div class="error-box" role="alert">@_error</div>
+            }
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public EventCallback OnCancel { get; set; }
+
+    [Parameter, EditorRequired]
+    public EventCallback<CreateUserResponse> OnCreated { get; set; }
+
+    private readonly CreateUserModel _model = new();
+    private string? _error;
+    private bool _busy;
+
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            var body = new CreateUserRequest
+            {
+                Email = _model.Email ?? string.Empty,
+                Role = _model.Role ?? "User",
+            };
+
+            using var response = await Api.PostAsJsonAsync("/v1/admin/users", body);
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ProblemReader.ReadAsync(response);
+                return;
+            }
+
+            var created = await response.Content.ReadFromJsonAsync<CreateUserResponse>();
+            if (created is null)
+            {
+                _error = "The server returned an unexpected response.";
+                return;
+            }
+
+            await OnCreated.InvokeAsync(created);
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class CreateUserModel
+    {
+        [Required(ErrorMessage = "The Email field is required.")]
+        [EmailAddress(ErrorMessage = "The Email field is not a valid email address.")]
+        public string? Email { get; set; }
+
+        [Required]
+        public string? Role { get; set; } = "User";
+    }
+}

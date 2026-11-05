@@ -1,0 +1,113 @@
+@page "/account/set-passphrase"
+@inject HttpClient Api
+@inject TokenStore TokenStore
+@inject NavigationManager Nav
+
+<PageTitle>Set passphrase — Email Agent</PageTitle>
+
+<div class="auth-card">
+    <h1>Set your passphrase</h1>
+    <p class="hint">
+        Your passphrase encrypts your key on this device. It is never sent to
+        the server and cannot be recovered — choose at least 12 characters you
+        will remember.
+    </p>
+
+    <EditForm Model="@_model" OnValidSubmit="@SubmitAsync" FormName="set-passphrase">
+        <DataAnnotationsValidator />
+        <div class="form-field">
+            <label for="passphrase">Passphrase</label>
+            <InputText id="passphrase" type="password" class="form-control"
+                       @bind-Value="_model.Passphrase" autocomplete="new-password" />
+            <ValidationMessage For="@(() => _model.Passphrase)" />
+        </div>
+        <div class="form-field">
+            <label for="passphrase-confirm">Confirm passphrase</label>
+            <InputText id="passphrase-confirm" type="password" class="form-control"
+                       @bind-Value="_model.PassphraseConfirm" autocomplete="new-password" />
+            <ValidationMessage For="@(() => _model.PassphraseConfirm)" />
+        </div>
+        <button type="submit" class="btn-primary" disabled="@_busy">
+            @(_busy ? "Saving…" : "Set passphrase")
+        </button>
+        @if (_error is not null)
+        {
+            <div class="error-box" role="alert">@_error</div>
+        }
+    </EditForm>
+</div>
+
+@code {
+    private readonly PassphraseModel _model = new();
+    private string? _error;
+    private bool _busy;
+
+    /// <summary>
+    /// POST /v1/account/set-passphrase with the two inputs (Q-A4 / Q-E1).
+    /// 204 → done, route to /; 409 (already set — race or reload) → also
+    /// route home; other 4xx/5xx render the RFC 7807 detail inline.
+    /// </summary>
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            var body = new SetPassphraseBody
+            {
+                Passphrase = _model.Passphrase,
+                PassphraseConfirm = _model.PassphraseConfirm,
+            };
+
+            using var response = await Api.PostAsJsonAsync("/v1/account/set-passphrase", body);
+            if (response.StatusCode == HttpStatusCode.Conflict)
+            {
+                // Already set — nothing to do; continue into the app.
+                TokenStore.NeedsPassphraseSetup = false;
+                Nav.NavigateTo("/");
+                return;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ProblemReader.ReadAsync(response);
+                return;
+            }
+
+            TokenStore.NeedsPassphraseSetup = false;
+            Nav.NavigateTo("/");
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        catch (OperationCanceledException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class PassphraseModel
+    {
+        [Required(ErrorMessage = "The passphrase is required.")]
+        [MinLength(12, ErrorMessage = "The passphrase must be at least 12 characters.")]
+        public string? Passphrase { get; set; }
+
+        [Required(ErrorMessage = "The passphrase confirmation is required.")]
+        [Compare(nameof(Passphrase), ErrorMessage = "The passphrases do not match.")]
+        public string? PassphraseConfirm { get; set; }
+    }
+
+    private sealed class SetPassphraseBody
+    {
+        [JsonPropertyName("passphrase")]
+        public string? Passphrase { get; init; }
+
+        [JsonPropertyName("passphrase_confirm")]
+        public string? PassphraseConfirm { get; init; }
+    }
+}
