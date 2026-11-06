@@ -5,6 +5,7 @@ using EmailAgent.Api.Endpoints;
 using EmailAgent.Api.Errors;
 using EmailAgent.Api.HealthChecks;
 using EmailAgent.Api.Options;
+using EmailAgent.Api.Sources;
 using EmailAgent.Core.Options;
 using EmailAgent.Infrastructure;
 using EmailAgent.Infrastructure.Entities;
@@ -160,6 +161,13 @@ builder.Services.AddSingleton<DefaultTrustAnchor>();
 builder.Services.AddSingleton<PluginLoader>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PluginLoader>());
 
+// M2T5 (§5 / §13.3 / SQ-7): the /v1/user/sources service pair. Scoped, not
+// singleton, so SourceService, EncryptedSourceConfigStore and AuditLogger all
+// resolve the SAME request DbContext — which is what lets source row, config
+// blob and audit row commit in one transaction.
+builder.Services.AddScoped<EncryptedSourceConfigStore>();
+builder.Services.AddScoped<SourceService>();
+
 builder.Host.UseSerilog((context, services, configuration) =>
     configuration
         .ReadFrom.Configuration(context.Configuration)
@@ -300,6 +308,13 @@ app.MapAccountEndpoints();
 // M1T7: the §13.3 /admin/users namespace — list/get/create/reissue-OTP, all
 // [Authorize(Roles = "Admin")], cursor pagination per §13.13.
 app.MapAdminUserEndpoints();
+
+// M2T5: the §13.3 /user/sources namespace (CRUD + /test-connection +
+// /{id}/fetch-now), [Authorize(Roles = "User")], cursor pagination per §13.13,
+// and the M2-only GET /v1/user/account/kdf the SPA derives X-User-Dek from.
+// Mapped before the catch-all so the literal routes always outrank it.
+app.MapSourcesEndpoints();
+app.MapUserAccountEndpoints();
 
 // §13.12 AC: unmatched routes answer with an RFC 7807 404 instead of an
 // empty-bodied framework response. A `{**path}` catch-all (every method) is

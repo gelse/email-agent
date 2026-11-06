@@ -10,8 +10,10 @@ namespace EmailAgent.Infrastructure.Security;
 
 /// <summary>
 /// M1T3 encryption service: Argon2id KEK derivation (Isopoh, Q-E2) and
-/// AES-256-GCM DEK wrap/unwrap (Q-E3/Q-E6), plus the system-key helpers for
-/// system-owned secrets (Q-E7). Library-only — no HTTP, no EF Core.
+/// AES-256-GCM DEK wrap/unwrap (Q-E3/Q-E6), the system-key helpers for
+/// system-owned secrets (Q-E7), and — from M2T5 (SQ-8) — the user-DEK
+/// wrap/unwrap pair that seals source configs and message bodies.
+/// Library-only — no HTTP, no EF Core.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -186,6 +188,98 @@ public sealed class Argon2idAesGcmEncryptionService : IEncryptionService
         // not a caller error, so no passphrase-style typed exception wraps it.
         return AesGcmUnwrap(ciphertext, _systemKey, nonce);
     }
+
+    /// <inheritdoc />
+    public WrappedSecret WrapWithUserDek(
+        Guid userId, byte[] dek, byte[] plaintext, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(dek);
+        ArgumentNullException.ThrowIfNull(plaintext);
+        ct.ThrowIfCancellationRequested();
+
+        if (dek.Length != DekByteLength)
+        {
+            throw new ArgumentException(
+                $"The data-encryption key must be exactly {DekByteLength} bytes.", nameof(dek));
+        }
+
+        var nonce = RandomNumberGenerator.GetBytes(NonceByteLength);
+        var combined = new byte[plaintext.Length + GcmTagByteLength];
+        using (var aes = new AesGcm(dek, GcmTagByteLength))
+        {
+            aes.Encrypt(
+                nonce,
+                plaintext,
+                combined.AsSpan(0, plaintext.Length),
+                combined.AsSpan(plaintext.Length, GcmTagByteLength),
+                OwnerAad(userId));
+        }
+
+        return new WrappedSecret(combined, nonce);
+    }
+
+    /// <inheritdoc />
+    public byte[] UnwrapWithUserDek(
+        Guid userId, byte[] dek, byte[] ciphertext, byte[] nonce, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(dek);
+        ArgumentNullException.ThrowIfNull(ciphertext);
+        ArgumentNullException.ThrowIfNull(nonce);
+        ct.ThrowIfCancellationRequested();
+
+        if (dek.Length != DekByteLength)
+        {
+            throw new ArgumentException(
+                $"The data-encryption key must be exactly {DekByteLength} bytes.", nameof(dek));
+        }
+
+        if (nonce.Length != NonceByteLength)
+        {
+            // AesGcm would throw an untyped ArgumentException for a wrong-length
+            // nonce; CryptographicException is the documented failure shape of
+            // UnwrapWithUserDek (interface doc) and keeps every bad input on one
+            // path — a corrupt row or a wrong DEK are the same to the caller.
+            throw new CryptographicException(
+                $"The nonce must be {NonceByteLength} bytes.");
+        }
+
+        if (ciphertext.Length < GcmTagByteLength)
+        {
+            // Guard before allocating: `new byte[negative]` would throw
+            // OverflowException, which is NOT caught below and would escape as
+            // an untyped 500 instead of the documented CryptographicException
+            // path (internal-blob-missing / dek-invalid mapping).
+            throw new CryptographicException("The ciphertext is malformed.");
+        }
+
+        try
+        {
+            using var aes = new AesGcm(dek, GcmTagByteLength);
+            var plaintext = new byte[ciphertext.Length - GcmTagByteLength];
+            aes.Decrypt(
+                nonce,
+                ciphertext.AsSpan(0, plaintext.Length),
+                ciphertext.AsSpan(plaintext.Length, GcmTagByteLength),
+                plaintext,
+                OwnerAad(userId));
+            return plaintext;
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            // Defensive: unreachable now that the length is pre-checked, but a
+            // "not authentic" outcome must never surface as an ArgumentException.
+            throw new CryptographicException("The ciphertext is malformed.", ex);
+        }
+    }
+
+    /// <summary>
+    /// The per-owner additional-authenticated-data for
+    /// <see cref="WrapWithUserDek"/> / <see cref="UnwrapWithUserDek"/>: binds
+    /// every blob to the account whose DEK wrote it (M2T5 SQ-8). Not a secret —
+    /// it is public context, not key material.
+    /// </summary>
+    private static byte[] OwnerAad(Guid userId)
+        => Encoding.UTF8.GetBytes($"user-dek:{userId:D}");
 
     /// <summary>
     /// Argon2id KEK derivation without mutex handling — callers hold the

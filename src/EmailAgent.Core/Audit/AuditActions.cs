@@ -38,4 +38,23 @@ public static class AuditActions
     /// <c>load_failed</c>) rides in <c>metadata_json</c>. System event.
     /// </summary>
     public const string PluginRejected = "plugin_rejected";
+
+    /// <summary>
+    /// M2T5: <c>POST /v1/user/sources</c> created a <c>message_sources</c> row
+    /// plus its <c>message_source_config</c> blob (§15). Never carries the
+    /// connector config or any credential in <c>metadata_json</c>.
+    /// </summary>
+    public const string CreateSource = "create_source";
+
+    /// <summary>M2T5: <c>PATCH /v1/user/sources/{id}</c>; changed field names ride in <c>metadata_json</c>.</summary>
+    public const string UpdateSource = "update_source";
+
+    /// <summary>M2T5: <c>DELETE /v1/user/sources/{id}</c> — source row + config blob in one transaction (SQ-7).</summary>
+    public const string DeleteSource = "delete_source";
+
+    /// <summary>M2T5: <c>POST /v1/user/sources/test-connection</c>; the outcome (<c>ok</c>) rides in <c>metadata_json</c>.</summary>
+    public const string TestSourceConnection = "test_source_connection";
+
+    /// <summary>M2T5: <c>POST /v1/user/sources/{id}/fetch-now</c>; counts ride in <c>metadata_json</c>.</summary>
+    public const string FetchSourceNow = "fetch_source_now";
 }

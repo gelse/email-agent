@@ -234,6 +234,56 @@ public class Argon2idAesGcmEncryptionServiceTests
             "a key of exactly 32 bytes must differ from the longer test key");
     }
 
+    // -------------------------------------------------------- User DEK (M2T5)
+
+    [Fact]
+    public void WrapWithUserDek_Then_UnwrapWithUserDek_RoundTrips_AndBindsOwner()
+    {
+        var service = CreateService();
+        var dek = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+        var plaintext = Encoding.UTF8.GetBytes("m2t5 user-dek blob payload");
+
+        var wrapped = service.WrapWithUserDek(UserId, dek, plaintext);
+
+        wrapped.Nonce.Should().HaveCount(12);
+        wrapped.Ciphertext.Should().HaveCount(plaintext.Length + 16, "ciphertext + GCM tag");
+        service.UnwrapWithUserDek(UserId, dek, wrapped.Ciphertext, wrapped.Nonce)
+            .Should().Equal(plaintext);
+
+        // Owner binding (SQ-8): the same DEK cannot open another account's row.
+        var crossAct = () => service.UnwrapWithUserDek(
+            Guid.NewGuid(), dek, wrapped.Ciphertext, wrapped.Nonce);
+        crossAct.Should().Throw<CryptographicException>(
+            "the AAD binds every blob to the userId that wrote it");
+    }
+
+    [Fact]
+    public void UnwrapWithUserDek_CiphertextShorterThanTag_ThrowsCryptographicException()
+    {
+        var service = CreateService();
+        var dek = Enumerable.Range(0, 32).Select(i => (byte)(i + 1)).ToArray();
+        var wrapped = service.WrapWithUserDek(
+            UserId, dek, Encoding.UTF8.GetBytes("payload"));
+
+        // A corrupt row shorter than the 16-byte GCM tag must fail as a
+        // CryptographicException — before, `new byte[len - 16]` threw
+        // OverflowException, which escaped as an untyped 500 instead of the
+        // documented internal-blob-missing / dek-invalid mapping.
+        var truncated = new[]
+        {
+            Array.Empty<byte>(),
+            wrapped.Ciphertext.AsSpan(0, 8).ToArray(),
+            wrapped.Ciphertext.AsSpan(0, 15).ToArray(),
+        };
+
+        foreach (var blob in truncated)
+        {
+            var act = () => service.UnwrapWithUserDek(UserId, dek, blob, wrapped.Nonce);
+            act.Should().Throw<CryptographicException>(
+                "a ciphertext shorter than the GCM tag is malformed, never an untyped exception");
+        }
+    }
+
     // -------------------------------------------------------- KdfParams
 
     [Fact]
