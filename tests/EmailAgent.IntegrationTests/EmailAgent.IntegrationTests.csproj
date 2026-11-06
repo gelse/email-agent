@@ -29,6 +29,8 @@
   <ItemGroup>
     <ProjectReference Include="../../src/EmailAgent.Api/EmailAgent.Api.csproj" />
     <ProjectReference Include="../../src/EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
+    <!-- M2T4: the Greenmail-backed ImapMessageSource suite + GreenMailFixture. -->
+    <ProjectReference Include="../../src/EmailAgent.Connectors.Imap/EmailAgent.Connectors.Imap.csproj" />
     <ProjectReference Include="../../src/EmailAgent.Infrastructure/EmailAgent.Infrastructure.csproj" />
     <ProjectReference Include="../../src/EmailAgent.Spa/EmailAgent.Spa.csproj" />
   </ItemGroup>

@@ -1,10 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    M2T3: DEFAULT IMAP connector plugin skeleton. TargetFramework, Nullable,
-    ImplicitUsings, TreatWarningsAsErrors and InvariantGlobalization come
-    from Directory.Build.props; full plugin code lands in M2T4 — this task
-    only creates the project + embedded plugin.json so the build graph and
-    the DefaultTrustAnchor load path exist (task scope "In").
+    M2T3 created the project; M2T4 fills in the DEFAULT IMAP connector
+    implementation (MailKit). TargetFramework, Nullable, ImplicitUsings,
+    TreatWarningsAsErrors and InvariantGlobalization come from
+    Directory.Build.props.
   -->
 
   <PropertyGroup>
@@ -44,5 +43,14 @@
     <!-- Embedded as EmailAgent.Connectors.Imap.plugin.json — the loader's
          DEFAULT-plugin manifest source (no companion file on disk). -->
     <EmbeddedResource Include="plugin.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- M2T4: the suites reach the connector through its internal test seam
+         (internal ImapMessageSource(IImapClientFactory), ImapConfig and the
+         BODYSTRUCTURE extractor) instead of standing up a mail server for
+         every pure-logic assertion. -->
+    <InternalsVisibleTo Include="EmailAgent.UnitTests" />
+    <InternalsVisibleTo Include="EmailAgent.IntegrationTests" />
   </ItemGroup>
 </Project>
