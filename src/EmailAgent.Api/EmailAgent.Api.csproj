@@ -37,5 +37,11 @@
     <ProjectReference Include="../EmailAgent.Core/EmailAgent.Core.csproj" />
     <ProjectReference Include="../EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
     <ProjectReference Include="../EmailAgent.Infrastructure/EmailAgent.Infrastructure.csproj" />
+    <!-- M2T3: the three DEFAULT connector plugins ride along into the host
+         output (and transitively into the test hosts' AppContext.BaseDirectory)
+         — that is where the loader's DefaultTrustAnchor finds them (§5). -->
+    <ProjectReference Include="../EmailAgent.Connectors.Imap/EmailAgent.Connectors.Imap.csproj" />
+    <ProjectReference Include="../EmailAgent.Connectors.OpenAI/EmailAgent.Connectors.OpenAI.csproj" />
+    <ProjectReference Include="../EmailAgent.Connectors.Telegram/EmailAgent.Connectors.Telegram.csproj" />
   </ItemGroup>
 </Project>

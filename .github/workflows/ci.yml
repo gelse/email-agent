@@ -195,16 +195,26 @@ jobs:
           sed -i 's/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci-throwaway-postgres-password/' .env
           sed -i 's/^AUTH__SigningKey=$/AUTH__SigningKey=ci-throwaway-signing-key-not-a-real-secret-32chars/' .env
           sed -i 's/^system_kek=$/system_kek=ci-throwaway-system-kek-0123456789abcdef/' .env
+          # M2T3: Plugin:SigningKey is ValidateOnStart at >= 32 UTF-8 bytes —
+          # fill it in the same bootstrap pass as the M1 keys.
+          sed -i 's/^PLUGIN__SigningKey=$/PLUGIN__SigningKey=ci-throwaway-plugin-signing-key-0123456789abcdef/' .env
           sed -i 's|^ConnectionStrings__Postgres=$|ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=emailagent;Username=emailagent;Password=ci-throwaway-postgres-password|' .env
           # Fail loudly if materialization went stale (e.g. .env.example drift) instead of passing green on blanks.
           grep -Eq '^POSTGRES_PASSWORD=.+' .env
           grep -Eq '^AUTH__SigningKey=.+' .env
           grep -Eq '^system_kek=.+' .env
+          grep -Eq '^PLUGIN__SigningKey=.+' .env
           # Q-E7: System:KeyEncryptionKey is ValidateOnStart at >= 32 UTF-8 bytes;
           # assert here so a stale bootstrap fails at bootstrap, not at container start.
           kek_len="$(grep -m1 '^system_kek=' .env | cut -d= -f2- | tr -d '\n' | wc -c | tr -d '[:space:]')"
           if [ "$kek_len" -lt 32 ]; then
             echo "FAIL: .env system_kek is ${kek_len} bytes; System:KeyEncryptionKey must be >= 32 bytes (Q-E7, API ValidateOnStart)" >&2
+            exit 1
+          fi
+          # M2T3/SQ-3: same length rule for Plugin:SigningKey (API ValidateOnStart).
+          pkey_len="$(grep -m1 '^PLUGIN__SigningKey=' .env | cut -d= -f2- | tr -d '\n' | wc -c | tr -d '[:space:]')"
+          if [ "$pkey_len" -lt 32 ]; then
+            echo "FAIL: .env PLUGIN__SigningKey is ${pkey_len} bytes; Plugin:SigningKey must be >= 32 bytes (M2T3/SQ-3, API ValidateOnStart)" >&2
             exit 1
           fi
           grep -Eq '^ConnectionStrings__Postgres=.+' .env

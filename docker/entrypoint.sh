@@ -20,6 +20,12 @@ export AUTH__SigningKey
 AUDIT__HmacKey="$(cat /run/secrets/AUDIT__HmacKey)"
 export AUDIT__HmacKey
 
+# M2T3 / SQ-3 (§16 / Q-D5): per-install plugin-signing key read by the
+# plugin loader; ValidateOnStart at >= 32 UTF-8 bytes would otherwise kill
+# the host before the first /health/ready.
+PLUGIN__SigningKey="$(cat /run/secrets/PLUGIN__SigningKey)"
+export PLUGIN__SigningKey
+
 # Secret file name keeps M0's `system_kek` (§17 dev-secrets list); the
 # application-facing variable is SYSTEM__KeyEncryptionKey (§16 / Q-E7).
 SYSTEM__KeyEncryptionKey="$(cat /run/secrets/system_kek)"

@@ -41,7 +41,7 @@ done
 
 [ -f .env ] || fail ".env missing — cp .env.example .env and fill throwaway values"
 
-for k in POSTGRES_PASSWORD AUTH__SigningKey system_kek AUDIT__HmacKey ConnectionStrings__Postgres; do
+for k in POSTGRES_PASSWORD AUTH__SigningKey system_kek AUDIT__HmacKey PLUGIN__SigningKey ConnectionStrings__Postgres; do
     grep -Eq "^${k}=." .env || fail ".env has no value for $k"
 done
 

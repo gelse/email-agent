@@ -24,4 +24,18 @@ public static class AuditActions
 
     /// <summary>M1T7: <c>GET /v1/admin/users/{id}</c>.</summary>
     public const string AdminReadUser = "admin_read_user";
+
+    /// <summary>
+    /// M2T3: a plugin passed every load gate (signature or trust anchor,
+    /// approval, manifest validation) and was registered (§9 / Q-O5). Emitted
+    /// with a NULL actor — system event.
+    /// </summary>
+    public const string PluginLoaded = "plugin_loaded";
+
+    /// <summary>
+    /// M2T3: the loader refused a plugin; the reason (<c>unsigned</c>,
+    /// <c>signature_mismatch</c>, <c>not_approved</c>, <c>manifest_invalid</c>,
+    /// <c>load_failed</c>) rides in <c>metadata_json</c>. System event.
+    /// </summary>
+    public const string PluginRejected = "plugin_rejected";
 }

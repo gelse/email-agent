@@ -21,6 +21,10 @@
     <!-- M1T3: optionsBuilder.Bind(configuration.GetSection("System")) for
          EncryptionOptions (SYSTEM__KeyEncryptionKey, §16 / Q-E7). -->
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+    <!-- M2T3: PluginLoader implements IHostedService (hosted-service
+         abstractions only — this project must not reference the full
+         Microsoft.Extensions.Hosting). -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
     <!-- ServiceCollectionExtensions resolves ConnectionStrings:Postgres via
          GetConnectionString; not otherwise in this project's graph. -->
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.0.0" />
@@ -39,5 +43,11 @@
 
   <ItemGroup>
     <ProjectReference Include="../EmailAgent.Core/EmailAgent.Core.csproj" />
+    <!-- M2T3: the plugin gate stack (PluginLoader / PluginRegistry /
+         PluginManifestValidator / DefaultTrustAnchor) consumes the M2T1
+         contracts — PluginManifest, Capability, IMessageSource,
+         ValidationResult. Contracts references nothing, so the layering
+         stays acyclic (Api → {Core, Contracts, Infrastructure}). -->
+    <ProjectReference Include="../EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
   </ItemGroup>
 </Project>

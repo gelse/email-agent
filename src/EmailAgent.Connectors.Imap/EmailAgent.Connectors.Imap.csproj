@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    M2T3: DEFAULT IMAP connector plugin skeleton. TargetFramework, Nullable,
+    ImplicitUsings, TreatWarningsAsErrors and InvariantGlobalization come
+    from Directory.Build.props; full plugin code lands in M2T4 — this task
+    only creates the project + embedded plugin.json so the build graph and
+    the DefaultTrustAnchor load path exist (task scope "In").
+  -->
+
+  <PropertyGroup>
+    <!-- Determinism for DefaultTrustAnchor: CI builds Debug, the local gates
+         build Release, and the trust anchor pins ONE sha256 for this DLL —
+         so every build configuration and tree state must emit byte-identical
+         output. Four compiler facts are pinned here:
+         - Optimize=true: Debug's default /optimize- would emit different IL;
+         - GenerateAssemblyConfigurationAttribute=false: otherwise the PE
+           carries AssemblyConfiguration("Debug"/"Release");
+         - IncludeSourceRevisionInInformationalVersion=false: otherwise the
+           .NET 8 SDK's built-in SourceLink appends "+<gitsha>[_dirty]" —
+           a value that differs between a dirty local tree and CI's clean
+           checkout;
+         - DebugType=none: a portable PDB makes the PE depend on the PDB's
+           identity and the absolute document/build paths, so the CodeView
+           debug directory would differ per configuration and per checkout
+           path — no PDB, no drift (verified empirically by hashing
+           Debug/Release builds at two mount paths). -->
+    <Optimize>true</Optimize>
+    <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- M2T4's real IMAP transport; referenced from M2T3 per the task file so
+         the drop-in's dependency closure exists in the host graph. -->
+    <PackageReference Include="MailKit" Version="4.18.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embedded as EmailAgent.Connectors.Imap.plugin.json — the loader's
+         DEFAULT-plugin manifest source (no companion file on disk). -->
+    <EmbeddedResource Include="plugin.json" />
+  </ItemGroup>
+</Project>

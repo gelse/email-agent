@@ -43,6 +43,12 @@ public class EmailAgentDbContext : DbContext
 
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
+    // M2T3 / SQ-4: plugin load evidence (verified signatures) and per-version
+    // admin approvals (Q-O5; the M7b UI writes approvals, the loader reads them).
+    public DbSet<PluginSignature> PluginSignatures => Set<PluginSignature>();
+
+    public DbSet<PluginApproval> PluginApprovals => Set<PluginApproval>();
+
     // M1T4 / SQ-10: Identity's role entity (AspNet* mapped by the
     // Configurations/Identity*Map classes). The user-side Identity entities
     // map onto the existing `users` table, so only roles need a DbSet.

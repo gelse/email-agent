@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    M2T3: DEFAULT Telegram connector STUB (same rationale as
+    EmailAgent.Connectors.OpenAI — build graph + trust-anchor load path;
+    implementation lands in M8). The four properties pin byte-identical
+    Debug/Release output for DefaultTrustAnchor (see the Imap csproj).
+  -->
+
+  <PropertyGroup>
+    <Optimize>true</Optimize>
+    <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="plugin.json" />
+  </ItemGroup>
+</Project>

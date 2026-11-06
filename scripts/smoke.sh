@@ -128,6 +128,10 @@ if [ ! -f .env ]; then
     # M1T1+: Audit:HmacKey is ValidateOnStart for the api service — without
     # this fill the fresh-bootstrap path dies before the first /health/ready.
     sed -i 's/^AUDIT__HmacKey=$/AUDIT__HmacKey=ci-throwaway-audit-hmac-key-0123456789abcdef/' .env
+    # M2T3: Plugin:SigningKey is ValidateOnStart (>= 32 UTF-8 bytes) — same
+    # lesson as the system KEK (17e2334): fill it here or the api container
+    # exits before the first probe.
+    sed -i 's/^PLUGIN__SigningKey=$/PLUGIN__SigningKey=ci-throwaway-plugin-signing-key-0123456789abcdef/' .env
     sed -i 's|^ConnectionStrings__Postgres=$|ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=emailagent;Username=emailagent;Password=ci-throwaway-postgres-password|' .env
     # Throwaway credentials can never authenticate against an already-initialized
     # emailagent-dev cluster (POSTGRES_PASSWORD applies only at first init and
@@ -143,7 +147,7 @@ if [ ! -f .env ]; then
         exit 1
     fi
 fi
-for k in POSTGRES_PASSWORD AUTH__SigningKey system_kek ConnectionStrings__Postgres AUDIT__HmacKey; do
+for k in POSTGRES_PASSWORD AUTH__SigningKey system_kek ConnectionStrings__Postgres AUDIT__HmacKey PLUGIN__SigningKey; do
     if ! grep -Eq "^${k}=.+" .env; then
         echo "FAIL: .env has no value for $k" >&2
         exit 1
@@ -155,6 +159,15 @@ for k in POSTGRES_PASSWORD AUTH__SigningKey system_kek ConnectionStrings__Postgr
         kek_len="$(grep -m1 '^system_kek=' .env | cut -d= -f2- | tr -d '\n' | wc -c | tr -d '[:space:]')"
         if [ "$kek_len" -lt 32 ]; then
             echo "FAIL: .env system_kek is ${kek_len} bytes; System:KeyEncryptionKey must be >= 32 bytes (Q-E7, API ValidateOnStart)" >&2
+            exit 1
+        fi
+    fi
+    if [ "$k" = "PLUGIN__SigningKey" ]; then
+        # M2T3 / SQ-3: Plugin:SigningKey is ValidateOnStart at >= 32 UTF-8
+        # bytes — same fail-early rule as the system KEK above (17e2334).
+        pkey_len="$(grep -m1 '^PLUGIN__SigningKey=' .env | cut -d= -f2- | tr -d '\n' | wc -c | tr -d '[:space:]')"
+        if [ "$pkey_len" -lt 32 ]; then
+            echo "FAIL: .env PLUGIN__SigningKey is ${pkey_len} bytes; Plugin:SigningKey must be >= 32 bytes (M2T3/SQ-3, API ValidateOnStart)" >&2
             exit 1
         fi
     fi
@@ -330,16 +343,17 @@ run_form() {
         ADHOC_ENV="$(mktemp)"
         chmod 600 "$ADHOC_ENV"
         # The ad-hoc container runs the image's plain CMD (no compose-level
-        # entrypoint), so docker/entrypoint.sh never materializes the M1
+        # entrypoint), so docker/entrypoint.sh never materializes the M1/M2
         # secrets and the app's ValidateOnStart validators (System:KeyEncryption
-        # / Audit:HmacKey / Auth:SigningKey — M1T3/M1T4) would kill it before
-        # the probe. Feed them from .env (throwaway dev values, file mode 600,
-        # container removed below) exactly as the compose `api` service gets
-        # them. Pre-existing M1T4 drift in this M0-era smoke, surfaced by the
-        # Q-A13 run of this script.
+        # / Audit:HmacKey / Auth:SigningKey — M1T3/M1T4 / Plugin:SigningKey —
+        # M2T3) would kill it before the probe. Feed them from .env (throwaway
+        # dev values, file mode 600, container removed below) exactly as the
+        # compose `api` service gets them. Pre-existing M1T4 drift in this
+        # M0-era smoke, surfaced by the Q-A13 run of this script.
         printf 'ConnectionStrings__Postgres=%s\nBlobs__Path=/root/locked\n' "$conn_str" > "$ADHOC_ENV"
         printf 'AUDIT__HmacKey=%s\n' "$(grep '^AUDIT__HmacKey=' .env | cut -d= -f2-)" >> "$ADHOC_ENV"
         printf 'AUTH__SigningKey=%s\n' "$(grep '^AUTH__SigningKey=' .env | cut -d= -f2-)" >> "$ADHOC_ENV"
+        printf 'PLUGIN__SigningKey=%s\n' "$(grep '^PLUGIN__SigningKey=' .env | cut -d= -f2-)" >> "$ADHOC_ENV"
         printf 'SYSTEM__KeyEncryptionKey=%s\n' "$(grep '^system_kek=' .env | cut -d= -f2-)" >> "$ADHOC_ENV"
 
         ADHOC_CONTAINER="$(docker run -d --network "$api_net" --env-file "$ADHOC_ENV" "$api_image")"

@@ -9,7 +9,8 @@ namespace EmailAgent.IntegrationTests;
 /// <summary>
 /// M1T1 acceptance criterion: the configuration binder accepts every
 /// <c>AUTH__*</c>, <c>AUDIT__*</c>, <c>SYSTEM__*</c>, <c>OTP__*</c>,
-/// <c>SPA__*</c> and <c>API__*</c> environment variable without throwing.
+/// <c>SPA__*</c>, <c>API__*</c> and (M2T3) <c>PLUGIN__*</c> environment
+/// variable without throwing.
 /// The test boots the real host with those environment variables set and
 /// asserts that the env-var layer overrides the appsettings.json defaults.
 /// </summary>
@@ -33,6 +34,9 @@ public class ConfigurationBindingTests
         ["OTP__Lifetime"] = "1.00:00:00",
         ["SPA__AllowedOrigins"] = "",
         ["API__PublicBaseUrl"] = "http://localhost:8080",
+        // M2T3: Plugin:SigningKey is ValidateOnStart — the raw factory below
+        // must boot with it (env form of the §16 / SQ-3 contract).
+        ["PLUGIN__SigningKey"] = "m2t3-env-test-plugin-signing-key-0123456789",
     };
 
     [Fact]
@@ -80,6 +84,10 @@ public class ConfigurationBindingTests
             var api = config.GetSection("Api").Get<ApiOptions>();
             api.Should().NotBeNull();
             api!.PublicBaseUrl.Should().Be("http://localhost:8080");
+
+            var plugin = config.GetSection("Plugin").Get<PluginOptions>();
+            plugin.Should().NotBeNull();
+            plugin!.SigningKey.Should().Be(M1EnvVars["PLUGIN__SigningKey"]);
         }
         finally
         {
@@ -123,5 +131,11 @@ public class ConfigurationBindingTests
     public sealed class ApiOptions
     {
         public string? PublicBaseUrl { get; set; }
+    }
+
+    /// <summary>M2T3 §16 local bind target for the <c>Plugin</c> section.</summary>
+    public sealed class PluginOptions
+    {
+        public string? SigningKey { get; set; }
     }
 }

@@ -55,6 +55,9 @@ services:
       - AUTH__SigningKey
       - AUDIT__HmacKey
       - system_kek
+      # M2T3 / SQ-3 (§16 / Q-D5): plugin-signing key, materialized as
+      # PLUGIN__SigningKey by docker/entrypoint.sh.
+      - PLUGIN__SigningKey
 
   web:
     build:
@@ -103,6 +106,10 @@ secrets:
   # by docker/entrypoint.sh (§16 / Q-E7).
   system_kek:
     environment: system_kek
+  # M2T3 / SQ-3 (§16 / Q-D5): per-install plugin-signing key, materialized
+  # as PLUGIN__SigningKey by docker/entrypoint.sh (>= 32 UTF-8 bytes).
+  PLUGIN__SigningKey:
+    environment: PLUGIN__SigningKey
 
 volumes:
   pg_data:

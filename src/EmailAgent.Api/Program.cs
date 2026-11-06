@@ -8,6 +8,7 @@ using EmailAgent.Api.Options;
 using EmailAgent.Core.Options;
 using EmailAgent.Infrastructure;
 using EmailAgent.Infrastructure.Entities;
+using EmailAgent.Infrastructure.Plugins;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -19,6 +20,7 @@ using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Serilog;
+using System.Runtime.InteropServices;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -137,6 +139,26 @@ builder.Services.AddRateLimitPolicies();
 // signal the host logs a structured error — it never crashes the process
 // (operators run `tools/AuditVerify` from M1T9 for the report).
 builder.Services.AddHostedService<AuditChainStartupVerifier>();
+
+// M2T3 (§9 / §4 / §16 / SQ-3 / SQ-6 / Q-O5): the plugin loader.
+// - Plugin:SigningKey (env PLUGIN__SigningKey, ≥ 32 bytes) is required at
+//   host start — same fail-fast posture as the System/Audit keys above.
+// - Registry + gate services are singletons; PluginLoader is registered both
+//   as itself (Program's SIGHUP handler resolves it) and as the hosted
+//   service that runs one load cycle at startup (task step 8).
+builder.Services.AddOptions<PluginOptions>()
+    .Bind(builder.Configuration.GetSection(PluginOptions.SectionName))
+    .Validate(
+        options => PluginOptions.IsValidSigningKey(options.SigningKey),
+        PluginOptions.InvalidKeyMessage)
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<IPluginRegistry, PluginRegistry>();
+builder.Services.AddSingleton<PluginSignatureVerifier>();
+builder.Services.AddSingleton<PluginManifestValidator>();
+builder.Services.AddSingleton<DefaultTrustAnchor>();
+builder.Services.AddSingleton<PluginLoader>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PluginLoader>());
 
 builder.Host.UseSerilog((context, services, configuration) =>
     configuration
@@ -312,6 +334,24 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 });
 
 app.MapPrometheusScrapingEndpoint("/metrics");
+
+// M2T3 task step 8 (§4): reload plugins on SIGHUP — Linux only; Windows
+// reloads on restart (M10 verifies), so no handler is installed there.
+// DEVIATION (documented in the M2T3 task file): ctx.Cancel = true is set —
+// the task's snippet omits it, which would leave SIGHUP's default action in
+// place and TERMINATE the process instead of reloading. The registration is
+// disposed when the host stops.
+PosixSignalRegistration? pluginReloadSignal = null;
+if (OperatingSystem.IsLinux())
+{
+    var pluginLoader = app.Services.GetRequiredService<PluginLoader>();
+    pluginReloadSignal = PosixSignalRegistration.Create(PosixSignal.SIGHUP, context =>
+    {
+        context.Cancel = true;
+        _ = pluginLoader.Reload();
+    });
+    app.Lifetime.ApplicationStopping.Register(() => pluginReloadSignal?.Dispose());
+}
 
 app.Run();
 

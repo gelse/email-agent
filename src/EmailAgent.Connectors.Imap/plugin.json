@@ -1,0 +1,9 @@
+{
+  "plugin_id": "imap",
+  "version": "1.0.0",
+  "assembly": "EmailAgent.Connectors.Imap.dll",
+  "type": "EmailAgent.Connectors.Imap.ImapMessageSource",
+  "capabilities": ["processed_messages_write", "http_egress"],
+  "http_allowlist": ["imap.example.com", "imap.gmail.com"],
+  "notes": "Stub for M2T3; real implementation in M2T4. The allowlist entries are placeholders that satisfy the HttpEgress grant at LOAD time (M2 SQ-6 / §14): the user-provided IMAP host is resolved against the manifest list at config-validation time in M2T4/M2T5, never at load time (the task's example ships an empty list, which PluginManifestValidator would refuse — task-file inconsistency resolved in plans/implementation/M2T3 ## Progress)."
+}

@@ -513,6 +513,74 @@ namespace EmailAgent.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("EmailAgent.Infrastructure.Entities.PluginApproval", b =>
+                {
+                    b.Property<string>("PluginId")
+                        .HasColumnType("text")
+                        .HasColumnName("plugin_id");
+
+                    b.Property<string>("Version")
+                        .HasColumnType("text")
+                        .HasColumnName("version");
+
+                    b.Property<DateTimeOffset>("ApprovedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("approved_at");
+
+                    b.Property<Guid>("ApprovedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("approved_by_user_id");
+
+                    b.HasKey("PluginId", "Version");
+
+                    b.HasIndex("ApprovedByUserId");
+
+                    b.ToTable("plugin_approvals", (string)null);
+                });
+
+            modelBuilder.Entity("EmailAgent.Infrastructure.Entities.PluginSignature", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<byte[]>("AssemblySha256")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("assembly_sha256");
+
+                    b.Property<DateTimeOffset>("FirstSeenAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("first_seen_at");
+
+                    b.Property<DateTimeOffset>("LastSeenAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("last_seen_at");
+
+                    b.Property<string>("PluginId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("plugin_id");
+
+                    b.Property<byte[]>("Signature")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("signature");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PluginId", "Version")
+                        .IsUnique()
+                        .HasDatabaseName("ux_plugin_signatures_plugin_id_version");
+
+                    b.ToTable("plugin_signatures", (string)null);
+                });
+
             modelBuilder.Entity("EmailAgent.Infrastructure.Entities.ProcessedMessage", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1172,6 +1240,17 @@ namespace EmailAgent.Infrastructure.Migrations
                     b.Navigation("DecidedByUser");
 
                     b.Navigation("ProcessedMessage");
+                });
+
+            modelBuilder.Entity("EmailAgent.Infrastructure.Entities.PluginApproval", b =>
+                {
+                    b.HasOne("EmailAgent.Infrastructure.Entities.User", "ApprovedBy")
+                        .WithMany()
+                        .HasForeignKey("ApprovedByUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ApprovedBy");
                 });
 
             modelBuilder.Entity("EmailAgent.Infrastructure.Entities.ProcessedMessage", b =>

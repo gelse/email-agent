@@ -1,0 +1,9 @@
+{
+  "plugin_id": "telegram-send",
+  "version": "1.0.0",
+  "assembly": "EmailAgent.Connectors.Telegram.dll",
+  "type": "EmailAgent.Connectors.Telegram.TelegramStubMessageSource",
+  "capabilities": [],
+  "http_allowlist": [],
+  "notes": "Stub for M2T3; real implementation in M8 (no capabilities granted until then)."
+}

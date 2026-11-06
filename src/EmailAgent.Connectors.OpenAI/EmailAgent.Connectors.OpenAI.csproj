@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    M2T3: DEFAULT OpenAI-compatible connector STUB. It exists so the build
+    graph compiles and the DefaultTrustAnchor load path is exercised; the real
+    implementation lands in M3. See EmailAgent.Connectors.Imap.csproj for the
+    byte-identity rationale of the four properties below (CI=Debug,
+    local gates=Release, one pinned sha256).
+  -->
+
+  <PropertyGroup>
+    <Optimize>true</Optimize>
+    <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="plugin.json" />
+  </ItemGroup>
+</Project>
