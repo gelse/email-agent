@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!--
+    M3T1 (SQ-M3-7): the hand-rolled in-process OpenAI-compatible mock — a
+    test-only host started through WebApplicationFactory<OpenAIMock.Program>
+    from EmailAgent.IntegrationTests. Deliberately NOT part of EmailAgent.sln:
+    it is test infrastructure, referenced only by the integration-test project.
+
+    Program.cs declares an explicit class (no top-level statements) inside the
+    OpenAIMock namespace, so this entry point can never collide with
+    EmailAgent.Api's global-namespace `Program` in the shared test output.
+  -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>

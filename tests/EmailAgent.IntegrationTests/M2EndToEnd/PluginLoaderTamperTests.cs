@@ -40,8 +40,13 @@ public sealed class PluginLoaderTamperTests
 {
     private const string CompanionDll = "Fabricated.Plugin.dll";
 
+    /// <summary>
+    /// M3T1: the DEFAULT <c>IMessageSource</c> ids after the imap refusal
+    /// (the OpenAI-compatible DEFAULT plugin now occupies the IAgentEngine
+    /// slot, so it never appears in <c>MessageSourceIds</c>).
+    /// </summary>
     private static readonly string[] RemainingDefaultPluginIds =
-        { "openai-compatible", "telegram-send" };
+        { "telegram-send" };
 
     private readonly PostgresFixture _postgres;
 

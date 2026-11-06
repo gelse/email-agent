@@ -57,6 +57,18 @@ public class PluginLoaderTests
     private static readonly string[] DefaultPluginIds =
         { "imap", "openai-compatible", "telegram-send" };
 
+    /// <summary>
+    /// M3T1: each plugin occupies exactly ONE registry slot — since the
+    /// OpenAI-compatible entry type is an <c>IAgentEngine</c>, only these two
+    /// DEFAULT plugins appear in <see cref="IPluginRegistry.MessageSourceIds"/>.
+    /// <see cref="DefaultPluginIds"/> still names all three for identity /
+    /// signature / approval assertions.
+    /// </summary>
+    private static readonly string[] DefaultMessageSourceIds = { "imap", "telegram-send" };
+
+    /// <summary>M3T1: the DEFAULT plugins occupying the IAgentEngine slot.</summary>
+    private static readonly string[] DefaultAgentEngineIds = { "openai-compatible" };
+
     private readonly PostgresFixture _postgres;
 
     public PluginLoaderTests(PostgresFixture postgres) => _postgres = postgres;
@@ -86,8 +98,10 @@ public class PluginLoaderTests
         registry.GetMessageSource(AcceptedPluginId).Should().NotBeNull(
             "a plugin signed with Plugin:SigningKey and present in plugin_approvals must register");
         registry.MessageSourceIds.Should().BeEquivalentTo(
-            new[] { "imap", "openai-compatible", "telegram-send", AcceptedPluginId },
-            "the three DEFAULT plugins load alongside the accepted drop-in");
+            new[] { "imap", "telegram-send", AcceptedPluginId },
+            "the two DEFAULT message sources load alongside the accepted drop-in");
+        registry.AgentEngineIds.Should().BeEquivalentTo(
+            DefaultAgentEngineIds, "the DEFAULT OpenAI-compatible engine occupies the engine slot");
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<EmailAgentDbContext>();
@@ -139,7 +153,7 @@ public class PluginLoaderTests
 
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(UnsignedPluginId).Should().BeNull();
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         var rejection = await FindAuditMetadataAsync(
             factory, AuditActions.PluginRejected,
@@ -173,7 +187,7 @@ public class PluginLoaderTests
 
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(TamperedPluginId).Should().BeNull();
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         var rejection = await FindAuditMetadataAsync(
             factory, AuditActions.PluginRejected,
@@ -222,7 +236,7 @@ public class PluginLoaderTests
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(ManifestTamperedPluginId).Should().BeNull(
             "a manifest edited after signing must not register — its fields are covered by the HMAC");
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         // Filter by the message's unique plugin id: every signature_mismatch
         // row shares action + reason + assembly_file across this collection.
@@ -254,7 +268,7 @@ public class PluginLoaderTests
 
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(UnapprovedPluginId).Should().BeNull();
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         var rejection = await FindAuditMetadataAsync(
             factory, AuditActions.PluginRejected,
@@ -339,7 +353,7 @@ public class PluginLoaderTests
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(BadEntryTypePluginId).Should().BeNull(
             "a manifest declaring a type the assembly does not contain must not fall back to another IMessageSource");
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         var rejection = await FindAuditMetadataAsync(
             factory, AuditActions.PluginRejected,
@@ -386,7 +400,7 @@ public class PluginLoaderTests
         registry.GetMessageSource(hostPluginId).Should().NotBeNull(
             "the signed and approved plugin must register even with a sibling dependency beside it");
         registry.MessageSourceIds.Should().BeEquivalentTo(
-            new[] { "imap", "openai-compatible", "telegram-send", hostPluginId },
+            new[] { "imap", "telegram-send", hostPluginId },
             "the dependency must not become a registry entry of its own");
 
         var rejectionRow = await FindAuditMetadataAsync(
@@ -419,7 +433,13 @@ public class PluginLoaderTests
         var client = factory.CreateClient();
 
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
+        registry.AgentEngineIds.Should().BeEquivalentTo(
+            DefaultAgentEngineIds, "M3T1: the OpenAI-compatible DEFAULT plugin occupies the engine slot");
+        registry.GetAgentEngine("openai-compatible").Should().NotBeNull(
+            "the engine entry type registered through the loader's IAgentEngine dispatch");
+        registry.GetMessageSource("openai-compatible").Should().BeNull(
+            "each plugin occupies exactly ONE slot — the engine class is not an IMessageSource");
 
         foreach (var assemblyName in new[]
                      { "EmailAgent.Connectors.Imap", "EmailAgent.Connectors.OpenAI", "EmailAgent.Connectors.Telegram" })
@@ -461,6 +481,28 @@ public class PluginLoaderTests
             row.Signature.Should().BeEmpty(
                 "anchor-trust loads verify no HMAC (Q-O5) and must record an empty signature, not a made-up one");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // M3T1 review WARNING: the engine transport is the host's NAMED HttpClient
+    // and must carry a generous but FINITE timeout — an unbounded call can
+    // wedge a caller forever behind a stalled provider, while the framework's
+    // 100 s default aborts slow generations. If Program.cs ever drops the
+    // ConfigureHttpClient bound, this test fails before the defect ships.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Engine_Transport_HttpClient_Carries_The_Finite_Engine_Timeout()
+    {
+        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        await using var factory = ApiTestFactory.Create(connectionString);
+        _ = factory.CreateClient(); // host start
+
+        var httpClient = factory.Services.GetRequiredService<HttpClient>();
+
+        httpClient.Timeout.Should().Be(
+            TimeSpan.FromMinutes(30),
+            "the DI-resolved engine client must keep the configured bound — neither infinite nor the 100 s default");
     }
 
     // -----------------------------------------------------------------------
@@ -533,7 +575,7 @@ public class PluginLoaderTests
                 group => group.Count() == 1,
                 "the reload must leave exactly one entry per plugin_id");
         registry.MessageSourceIds.Should().BeEquivalentTo(
-            new[] { "imap", "openai-compatible", "telegram-send", SighupPluginId });
+            new[] { "imap", "telegram-send", SighupPluginId });
     }
 
     // -----------------------------------------------------------------------
@@ -596,8 +638,11 @@ public class PluginLoaderTests
         registry.GetMessageSource("imap").Should().BeNull(
             "refusal-wins: the refused drop-in claimed plugin_id imap, so the good build-output imap must not survive the scan");
         registry.MessageSourceIds.Should().BeEquivalentTo(
-            new[] { "openai-compatible", "telegram-send" },
-            "only the two DEFAULT plugins whose ids were not poisoned by a refusal remain registered");
+            new[] { "telegram-send" },
+            "only the DEFAULT message source whose id was not poisoned by the refusal remains registered");
+        registry.AgentEngineIds.Should().BeEquivalentTo(
+            DefaultAgentEngineIds,
+            "the refusal claimed plugin_id imap — the engine slot is untouched by that unregister");
 
         // The signature_mismatch row must carry the claimed plugin_id — that
         // is the value the refusal-wins unregister keys on, and what lets an

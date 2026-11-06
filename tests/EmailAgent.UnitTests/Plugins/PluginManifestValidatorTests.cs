@@ -61,4 +61,21 @@ public class PluginManifestValidatorTests
         result.Ok.Should().BeFalse();
         result.Error.Should().Contain("http_allowlist is empty");
     }
+
+    [Fact]
+    [Trait("Category", "M3T1")]
+    public void Manifest_With_WildcardHttpAllowlist_Passes()
+    {
+        // SQ-M3-5: the OpenAI-compatible engine ships http_allowlist: ["*"] —
+        // a v1 default the wildcard entry satisfies here at load time (the
+        // per-model base_url is resolved at runtime, see Q-CE3 / M9 follow-up).
+        var manifest = Manifest(
+            new HashSet<Capability> { Capability.HttpEgress },
+            allowlist: ["*"]);
+
+        var result = new PluginManifestValidator().Validate(manifest);
+
+        result.Ok.Should().BeTrue();
+        result.Error.Should().BeNull();
+    }
 }

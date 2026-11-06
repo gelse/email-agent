@@ -147,6 +147,10 @@ builder.Services.AddHostedService<AuditChainStartupVerifier>();
 // - Registry + gate services are singletons; PluginLoader is registered both
 //   as itself (Program's SIGHUP handler resolves it) and as the hosted
 //   service that runs one load cycle at startup (task step 8).
+// - M3T1: the engine plugins take an HttpClient via constructor, so
+//   IHttpClientFactory is registered (AddHttpClient) plus a transient
+//   HttpClient that backs onto PluginLoader.EngineHttpClientName — the loader
+//   resolves the constructor through ActivatorUtilities.
 builder.Services.AddOptions<PluginOptions>()
     .Bind(builder.Configuration.GetSection(PluginOptions.SectionName))
     .Validate(
@@ -160,6 +164,23 @@ builder.Services.AddSingleton<PluginManifestValidator>();
 builder.Services.AddSingleton<DefaultTrustAnchor>();
 builder.Services.AddSingleton<PluginLoader>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PluginLoader>());
+
+// M3T1: HTTP transport for engine plugins. The loader instantiates the
+// manifest-declared entry type through ActivatorUtilities, so any
+// constructor-injected HttpClient resolves here — an IHttpClientFactory
+// client (pooled handlers, one logical name for every plugin engine call).
+// The named client carries a generous but FINITE timeout (30 min) bounding
+// connect/send/response-HEADERS — note that HttpClient.Timeout stops at the
+// headers under ResponseHeadersRead (dotnet/runtime#54674). The BODY phase is
+// bounded by the engine's own per-call deadline (EngineCallOptions.Timeout or
+// its 30-minute default), and any timeout in either phase is translated by
+// the engine into EngineCallException(408) — never an
+// OperationCanceledException, which is reserved for caller cancellation.
+builder.Services.AddHttpClient();
+builder.Services.AddHttpClient(PluginLoader.EngineHttpClientName)
+    .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromMinutes(30));
+builder.Services.AddTransient(sp =>
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient(PluginLoader.EngineHttpClientName));
 
 // M2T5 (§5 / §13.3 / SQ-7): the /v1/user/sources service pair. Scoped, not
 // singleton, so SourceService, EncryptedSourceConfigStore and AuditLogger all
