@@ -1,6 +1,13 @@
 ﻿@* M1T8: role-gated nav links (Q-F1 — one SPA, routes gated by JWT role
    claims parsed client-side; the API re-verifies every request). *@
 <nav class="nav-menu">
+    <AuthorizeView Roles="User,Admin">
+        <Authorized>
+            @* M2T6 review fix (round 3): the milestone's main screen was
+               reachable only by typing the URL. *@
+            <NavLink class="nav-link" href="/user/sources" Match="NavLinkMatch.Prefix">Sources</NavLink>
+        </Authorized>
+    </AuthorizeView>
     <AuthorizeView Roles="Admin">
         <Authorized>
             <NavLink class="nav-link" href="/admin/users" Match="NavLinkMatch.Prefix">Users</NavLink>

@@ -57,4 +57,12 @@ public static class AuditActions
 
     /// <summary>M2T5: <c>POST /v1/user/sources/{id}/fetch-now</c>; counts ride in <c>metadata_json</c>.</summary>
     public const string FetchSourceNow = "fetch_source_now";
+
+    /// <summary>
+    /// M2T6: <c>POST /v1/user/account/unwrap-dek</c> failed because the
+    /// passphrase did not unwrap the stored DEK. Failure-only — a successful
+    /// unwrap is not audited — and <c>metadata_json</c> never carries the
+    /// passphrase, the KEK or the DEK (Q-E9).
+    /// </summary>
+    public const string DekUnwrapFailed = "dek_unwrap_failed";
 }

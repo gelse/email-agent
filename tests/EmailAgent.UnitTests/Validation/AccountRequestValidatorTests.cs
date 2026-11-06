@@ -40,6 +40,28 @@ public class AccountRequestValidatorTests
         result.Errors.Should().Contain(e => e.ErrorMessage.Contains("12"));
     }
 
+    /// <summary>
+    /// M2T6 review fix (round 2, NIT): the ceiling that matches unwrap-dek's
+    /// 4 KiB body cap. Without it, a stored passphrase longer than the unwrap
+    /// endpoint will ever accept could strand the account behind an
+    /// impossible unlock.
+    /// </summary>
+    [Fact]
+    public void SetPassphrase_Over512Characters_FailsWithPassphraseField()
+    {
+        var passphrase = new string('x', 513);
+        var result = new SetPassphraseRequestValidator().Validate(new SetPassphraseRequest
+        {
+            Passphrase = passphrase,
+            PassphraseConfirm = passphrase,
+        });
+
+        result.IsValid.Should().BeFalse(
+            "the 512-character ceiling must hold even when both inputs match");
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SetPassphraseRequest.Passphrase));
+        result.Errors.Should().Contain(e => e.ErrorMessage.Contains("512"));
+    }
+
     [Fact]
     public void SetPassphrase_MismatchedConfirmation_FailsWithConfirmField()
     {

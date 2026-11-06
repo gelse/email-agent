@@ -74,7 +74,10 @@
             }
 
             TokenStore.SessionEmail = _model.Email;
-            TokenStore.Set(token.AccessToken);
+
+            // M2T6 review fix (CRITICAL): a sign-in is a new principal — drop
+            // any DEK cached by a previous session before the new token lands.
+            TokenStore.SignIn(token.AccessToken);
             TokenStore.NeedsPassphraseSetup = true;
             Nav.NavigateTo("/account/change-password");
         }

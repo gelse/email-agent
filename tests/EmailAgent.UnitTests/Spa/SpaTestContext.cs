@@ -2,6 +2,8 @@ using System.Net;
 using System.Text;
 using Bunit;
 using EmailAgent.Spa.Auth;
+using EmailAgent.Spa.Notifications;
+using EmailAgent.Spa.Sources;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EmailAgent.UnitTests.Spa;
@@ -12,7 +14,8 @@ namespace EmailAgent.UnitTests.Spa;
 /// and provider) with the SPA's token store, role parser and view-once state
 /// registered, plus a programmable stub <see cref="HttpMessageHandler"/>
 /// standing in for the API (no test ever reaches a real service — AGENTS.md
-/// hard constraint 3).
+/// hard constraint 3). M2T6 adds the toast bus and the typed
+/// <see cref="SourcesClient"/> over the same stub, mirroring Program.cs.
 /// </summary>
 internal sealed class SpaTestContext : TestContext
 {
@@ -25,6 +28,11 @@ internal sealed class SpaTestContext : TestContext
         {
             BaseAddress = new Uri("http://localhost/"),
         });
+
+        // M2T6: same registrations as Program.cs — one toast queue per test
+        // and the sources client bound to the stubbed "Api" HttpClient.
+        Services.AddSingleton<ToastService>();
+        Services.AddScoped(sp => new SourcesClient(sp.GetRequiredService<HttpClient>()));
     }
 
     /// <summary>The stub transport every page's injected HttpClient uses.</summary>
@@ -32,6 +40,9 @@ internal sealed class SpaTestContext : TestContext
 
     /// <summary>The resolved singleton token store (same instance the pages see).</summary>
     public TokenStore Store => Services.GetRequiredService<TokenStore>();
+
+    /// <summary>The toast bus the components raise (same instance the pages see).</summary>
+    public ToastService Toasts => Services.GetRequiredService<ToastService>();
 
     /// <summary>bUnit's fake NavigationManager (records NavigateTo targets).</summary>
     public Microsoft.AspNetCore.Components.NavigationManager Nav

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using EmailAgent.Core.Audit;
+using EmailAgent.Core.Security;
 using EmailAgent.Infrastructure;
 using EmailAgent.Infrastructure.Enums;
 using FluentAssertions;
@@ -23,6 +24,9 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 [Collection("Postgres")]
 public class SourcesEndpointsTests
 {
+    /// <summary>The passphrase the unwrap-dek suite's REAL key material is wrapped under.</summary>
+    private const string UnwrapPassphrase = "m2t6-unwr4p-passphr4se";
+
     private readonly PostgresFixture _postgres;
 
     public SourcesEndpointsTests(PostgresFixture postgres) => _postgres = postgres;
@@ -851,6 +855,278 @@ public class SourcesEndpointsTests
 
         (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.Conflict))
             .GetProperty("type").GetString().Should().Be("/errors/passphrase-not-set");
+    }
+
+    // -----------------------------------------------------------------------
+    // Cross-cutting: POST /v1/user/account/unwrap-dek (M2T6, adjudication R2)
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// R2 happy path: the passphrase travels once in the body, the server
+    /// runs <c>IEncryptionService.UnwrapDek</c> for the signed-in caller and
+    /// the 200 body is exactly the 32-byte DEK — never the passphrase or the
+    /// wrapped material.
+    /// </summary>
+    [Fact]
+    public async Task UnwrapDek_CorrectPassphrase_ReturnsPlaintextDek_WithoutEchoingPassphrase()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        var expectedDek = await SourcesTestHost.SetRealKdfMaterialAsync(
+            factory, host.UserId, UnwrapPassphrase);
+
+        using var response = await client.SendAsync(SourcesTestHost.Request(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
+            new { passphrase = UnwrapPassphrase }));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.Contains("Cache-Control").Should().BeTrue(
+            "the plaintext DEK answer declares its caching intent explicitly");
+        response.Headers.CacheControl!.NoStore.Should().BeTrue(
+            "the one body that carries the DEK must never be cacheable (M2T6 review fix)");
+        response.Content.Headers.ContentType!.ToString()
+            .Should().Contain("application/json");
+        var body = await AccountTestHost.ReadJsonAsync(response);
+        body.GetProperty("dek").GetString().Should().Be(
+            expectedDek, "the endpoint hands back exactly the DEK the wrap was minted with");
+
+        var raw = await response.Content.ReadAsStringAsync();
+        raw.Should().NotContain(UnwrapPassphrase,
+            "the passphrase never round-trips to the caller");
+        raw.Should().NotContain("\"passphrase\"",
+            "the 200 body is { dek } and nothing else");
+        raw.Should().NotContain("dek_wrapped").And.NotContain("dek_nonce",
+            "wrapped material stays server-side");
+    }
+
+    /// <summary>
+    /// Failure-only audit (M2T6): a probe leaves evidence BEFORE the 401, and
+    /// the row's metadata is empty — no passphrase, KEK or DEK (Q-E9).
+    /// </summary>
+    [Fact]
+    public async Task UnwrapDek_WrongPassphrase_Returns401_CredentialMismatch_AndAuditsFailure()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        await SourcesTestHost.SetRealKdfMaterialAsync(factory, host.UserId, UnwrapPassphrase);
+
+        using var response = await client.SendAsync(SourcesTestHost.Request(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
+            new { passphrase = "definitely-not-the-passphrase" }));
+
+        var problem = await AccountTestHost.ReadProblemAsync(
+            response, HttpStatusCode.Unauthorized);
+        problem.GetProperty("type").GetString().Should().Be("/errors/credential-mismatch");
+        problem.GetProperty("detail").GetString().Should().Be("The passphrase is not valid.");
+
+        var audits = await AccountTestHost.AuditRowsAsync(factory, host.UserId);
+        var failure = audits.Should().ContainSingle(
+            a => a.Action == AuditActions.DekUnwrapFailed).Which;
+        failure.TargetId.Should().Be(host.UserId.ToString());
+        failure.TargetType.Should().Be("user");
+
+        using var metadata = JsonDocument.Parse(failure.MetadataJson ?? "{}");
+        metadata.RootElement.EnumerateObject().Should().BeEmpty(
+            "the failure row mirrors login_failure: an empty metadata payload (Q-E9)");
+        failure.MetadataJson.Should().NotContain(UnwrapPassphrase);
+    }
+
+    /// <summary>
+    /// Handler order: the no-material sentinel fires BEFORE the body is read,
+    /// so even an empty payload (a 400 in every other case) is a 409 pointing
+    /// the SPA at the first-login passphrase flow.
+    /// </summary>
+    [Fact]
+    public async Task UnwrapDek_NoKeyMaterial_Returns409_BeforeReadingBody()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        using var empty = await client.SendAsync(SourcesTestHost.RawRequest(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, string.Empty));
+        (await AccountTestHost.ReadProblemAsync(empty, HttpStatusCode.Conflict))
+            .GetProperty("type").GetString().Should().Be(
+                "/errors/passphrase-not-set",
+                "no wrapped DEK exists, whatever the payload said");
+
+        using var withBody = await client.SendAsync(SourcesTestHost.Request(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
+            new { passphrase = UnwrapPassphrase }));
+        (await AccountTestHost.ReadProblemAsync(withBody, HttpStatusCode.Conflict))
+            .GetProperty("type").GetString().Should().Be("/errors/passphrase-not-set");
+    }
+
+    /// <summary>
+    /// Missing, empty and whitespace-only passphrases are §13.12 validation
+    /// errors naming <c>passphrase</c> (no length bound: any present value
+    /// falls through to the uniform 401 below).
+    /// </summary>
+    [Fact]
+    public async Task UnwrapDek_MissingOrEmptyPassphrase_Returns400_NamedPassphrase()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        // Material FIRST: without it the 409 sentinel precedes any body read.
+        await SourcesTestHost.SetRealKdfMaterialAsync(factory, host.UserId, UnwrapPassphrase);
+
+        using var missing = await client.SendAsync(SourcesTestHost.RawRequest(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, "{}"));
+        (await SourcesTestHost.ReadErrorReasonAsync(
+            missing, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
+            .Should().Contain("required");
+
+        using var empty = await client.SendAsync(SourcesTestHost.RawRequest(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
+            """{"passphrase":""}"""));
+        (await SourcesTestHost.ReadErrorReasonAsync(
+            empty, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
+            .Should().Contain("required");
+
+        using var whitespace = await client.SendAsync(SourcesTestHost.RawRequest(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
+            """{"passphrase":"    "}"""));
+        (await SourcesTestHost.ReadErrorReasonAsync(
+            whitespace, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
+            .Should().Contain("required");
+    }
+
+    [Fact]
+    public async Task UnwrapDek_MalformedBody_Returns400_NotValidJson()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        await SourcesTestHost.SetRealKdfMaterialAsync(factory, host.UserId, UnwrapPassphrase);
+
+        using var response = await client.SendAsync(SourcesTestHost.RawRequest(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, "{not json"));
+
+        (await SourcesTestHost.ReadErrorReasonAsync(
+            response, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
+            .Should().Be("The request body is not valid JSON.");
+    }
+
+    /// <summary>
+    /// M2T6 review fix: the body read is bounded (4 KiB) before anything is
+    /// buffered whole, so a multi-megabyte POST cannot park a string in
+    /// memory while the per-user KEK mutex is held. Same problem type and
+    /// field name as every other body rejection.
+    /// </summary>
+    [Fact]
+    public async Task UnwrapDek_OversizedBody_Returns400_NamedPassphrase()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        await SourcesTestHost.SetRealKdfMaterialAsync(factory, host.UserId, UnwrapPassphrase);
+
+        var oversized = new string('a', 64 * 1024);
+        using var response = await client.SendAsync(SourcesTestHost.RawRequest(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
+            $"{{\"passphrase\":\"{oversized}\"}}"));
+
+        (await SourcesTestHost.ReadErrorReasonAsync(
+            response, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
+            .Should().Contain("too large");
+    }
+
+    /// <summary>
+    /// Status gate precedes the sentinel: a Disabled account is 403 even with
+    /// no key material (which would otherwise answer 409).
+    /// </summary>
+    [Fact]
+    public async Task UnwrapDek_DisabledAccount_Returns403_BeforeSentinel()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        var disabledId = await AdminTestHost.SeedUserAsync(
+            factory, SourcesTestHost.UniqueEmail("disabled"), UserRole.User, UserStatus.Disabled);
+        var disabledBearer = await AdminTestHost.BearerAsync(factory, disabledId, "User");
+
+        using var response = await client.SendAsync(SourcesTestHost.Request(
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", disabledBearer,
+            new { passphrase = UnwrapPassphrase }));
+
+        (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.Forbidden))
+            .GetProperty("type").GetString().Should().Be("/errors/forbidden");
+    }
+
+    [Fact]
+    public async Task UnwrapDek_Anonymous_Returns401_RFC7807()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        using var response = await client.PostAsync(
+            "/v1/user/account/unwrap-dek",
+            new StringContent(
+                $"{{\"passphrase\":\"{UnwrapPassphrase}\"}}", Encoding.UTF8, "application/json"));
+
+        (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.Unauthorized))
+            .GetProperty("type").GetString().Should().Be("/errors/unauthorized");
+    }
+
+    /// <summary>
+    /// Q-E5's zero-wait per-user KEK mutex: losers map to 429 with
+    /// <c>Retry-After: 1</c>, the winner still returns the DEK. The critical
+    /// section is widened to 256 MiB of Argon2id (the same cost trick as
+    /// <c>Argon2idAesGcmEncryptionServiceTests</c>' barrier test) so every
+    /// concurrent caller arrives while the winner is still deriving.
+    /// </summary>
+    [Fact]
+    public async Task UnwrapDek_ConcurrentDerivation_Returns429_WithRetryAfter()
+    {
+        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        await using var factory = host.Factory;
+        using var client = host.Client;
+
+        var parameters = KdfParams.Default() with { MemoryKb = 262144 };
+        await SourcesTestHost.SetRealKdfMaterialAsync(
+            factory, host.UserId, UnwrapPassphrase, parameters);
+
+        var responses = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+            client.SendAsync(SourcesTestHost.Request(
+                HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
+                new { passphrase = UnwrapPassphrase }))));
+
+        try
+        {
+            responses.Count(r => r.StatusCode == HttpStatusCode.OK)
+                .Should().BeGreaterOrEqualTo(1, "the mutex winner always unwraps");
+
+            var busy = responses
+                .Where(r => r.StatusCode == HttpStatusCode.TooManyRequests)
+                .ToList();
+            busy.Should().NotBeEmpty(
+                "callers arriving mid-derivation observe the typed busy exception (Q-E5)");
+
+            foreach (var response in busy)
+            {
+                response.Headers.RetryAfter?.ToString().Should().Be("1");
+                var problem = await AccountTestHost.ReadProblemAsync(
+                    response, HttpStatusCode.TooManyRequests);
+                problem.GetProperty("type").GetString().Should().Be("/errors/rate-limited");
+            }
+        }
+        finally
+        {
+            foreach (var response in responses)
+            {
+                response.Dispose();
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -1,0 +1,33 @@
+@inject ToastService Toasts
+@implements IDisposable
+
+@* M2T6: the toast viewport MainLayout renders — a polite live region so
+   screen readers announce new notifications, with errors additionally
+   marked role="alert" (task Risks "Toast accessibility"). *@
+<div class="toast-region" aria-live="polite" aria-atomic="false">
+    @foreach (var toast in Toasts.Items)
+    {
+        <div class="toast @CssClass(toast.Kind)"
+             id="toast-@toast.Id.ToString("N")"
+             role="@(toast.Kind == ToastKind.Error ? "alert" : "status")">
+            <span class="toast-message">@toast.Message</span>
+            <button type="button" class="toast-dismiss" @onclick="() => Toasts.Dismiss(toast.Id)"
+                    aria-label="Dismiss notification">Dismiss</button>
+        </div>
+    }
+</div>
+
+@code {
+    protected override void OnInitialized() => Toasts.Changed += OnToastsChanged;
+
+    private void OnToastsChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private static string CssClass(ToastKind kind) => kind switch
+    {
+        ToastKind.Success => "toast-success",
+        ToastKind.Error => "toast-error",
+        _ => "toast-info",
+    };
+
+    public void Dispose() => Toasts.Changed -= OnToastsChanged;
+}

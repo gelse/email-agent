@@ -1,0 +1,80 @@
+@namespace EmailAgent.Spa.Pages.User
+
+<div class="modal-backdrop" @onclick="OnCancel">
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-source-title"
+         @onclick:stopPropagation="true">
+        <h3 id="delete-source-title">Delete source</h3>
+        @if (Source is not null)
+        {
+            <p>
+                Delete <strong>@Source.DisplayName</strong>? Its run history and stored
+                configuration are removed. This cannot be undone.
+            </p>
+        }
+        @if (!string.IsNullOrEmpty(Error))
+        {
+            <div class="error-box" id="delete-source-error" role="alert">@Error</div>
+        }
+        <div class="modal-actions">
+            <button type="button" class="btn-danger" id="delete-source-confirm"
+                    disabled="@Busy" @onclick="ConfirmAsync">
+                @(Busy ? "Deleting…" : "Delete")
+            </button>
+            <button type="button" class="btn-secondary" id="delete-source-cancel"
+                    disabled="@Busy" @onclick="OnCancel">
+                Cancel
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>The source to delete, used for the confirmation wording.</summary>
+    [Parameter, EditorRequired] public SourceDto? Source { get; set; }
+
+    /// <summary>Invoked after the API accepted the deletion, so the list can refresh.</summary>
+    [Parameter] public EventCallback OnDeleted { get; set; }
+
+    /// <summary>Closes the dialog without deleting.</summary>
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    [Inject] private SourcesClient Sources { get; set; } = default!;
+
+    private bool Busy;
+    private string? Error;
+
+    private async Task ConfirmAsync()
+    {
+        if (Source is null || Busy)
+        {
+            return;
+        }
+
+        Busy = true;
+        Error = null;
+        try
+        {
+            await Sources.DeleteAsync(Source.Id);
+            await OnDeleted.InvokeAsync();
+        }
+        catch (SourcesApiException ex)
+        {
+            // A missing source (404) still means the goal state holds: it is gone.
+            if (ex.Status == HttpStatusCode.NotFound)
+            {
+                await OnDeleted.InvokeAsync();
+                return;
+            }
+
+            Error = ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            Error = "Could not reach the API.";
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+}

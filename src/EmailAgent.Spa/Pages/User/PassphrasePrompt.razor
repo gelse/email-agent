@@ -1,0 +1,205 @@
+@using System.IO
+@using System.Text.Json
+@inject HttpClient Api
+@inject TokenStore TokenStore
+@inject NavigationManager Nav
+
+@* M2T6 (adjudication R2): the M2-only unlock prompt. The passphrase is POSTed
+   to /v1/user/account/unwrap-dek, the server unwraps the caller's own DEK and
+   the SPA caches it in TokenStore.DekStore (memory only) — there is no JS
+   crypto and no argon2 in the bundle, and the copy deliberately does not
+   promise that the passphrase stays on the device (it does not). *@
+<div class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Unlock encrypted sources">
+        <h2>Unlock encrypted sources</h2>
+        <p class="hint">
+            Your sources are stored encrypted. Enter your account passphrase to
+            unwrap your key for this session — it is sent to the server for this
+            one request, never stored, and the key is dropped from memory when
+            you close the page.
+        </p>
+
+        <EditForm Model="@_model" OnValidSubmit="@SubmitAsync" FormName="passphrase-prompt">
+            <DataAnnotationsValidator />
+            <div class="form-field">
+                <label for="unlock-passphrase">Passphrase</label>
+                <InputText id="unlock-passphrase" type="password" class="form-control"
+                           @bind-Value="_model.Passphrase" autocomplete="current-password" />
+                <ValidationMessage For="@(() => _model.Passphrase)" />
+            </div>
+            <div class="modal-actions">
+                <button type="submit" class="btn-primary" id="unlock-submit" disabled="@_busy">
+                    @(_busy ? "Unlocking…" : "Unlock")
+                </button>
+            </div>
+        </EditForm>
+
+        @if (_error is not null)
+        {
+            <div class="error-box" id="unlock-error" role="alert">@_error</div>
+        }
+
+        @if (_notSet)
+        {
+            <p class="hint" id="unlock-not-set">
+                This account has no passphrase yet.
+                <a href="/account/set-passphrase" id="unlock-set-passphrase">Set a passphrase</a>
+                to finish the first-login flow.
+            </p>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Raised after a successful unwrap, once the DEK is in the store.</summary>
+    [Parameter, EditorRequired]
+    public EventCallback OnUnlocked { get; set; }
+
+    private readonly UnlockModel _model = new();
+    private string? _error;
+    private bool _busy;
+    private bool _notSet;
+
+    /// <summary>
+    /// POST /v1/user/account/unwrap-dek and cache the returned key. 200 →
+    /// <see cref="TokenStore.SetDek"/> + <see cref="OnUnlocked"/>; 409 →
+    /// first-login link; 401 → either an inline credential error (the
+    /// /errors/credential-mismatch verdict, field cleared so a typo is
+    /// retyped rather than resubmitted blindly) or, when the problem type is
+    /// /errors/unauthorized, a redirect to sign-in (the session never made
+    /// it, so the passphrase was never judged); 429 → the derivation already
+    /// in flight; anything else (400, 5xx, transport) → a generic
+    /// message. The passphrase field is cleared on every terminal outcome —
+    /// transport failures included (M2T6 review fix: the typed secret never
+    /// stays in the DOM once the attempt finished).
+    /// </summary>
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _notSet = false;
+        _busy = true;
+        try
+        {
+            using var response = await Api.PostAsJsonAsync(
+                "/v1/user/account/unwrap-dek",
+                new UnlockRequest { Passphrase = _model.Passphrase });
+
+            if (response.StatusCode == HttpStatusCode.OK)
+            {
+                var body = await response.Content.ReadFromJsonAsync<UnlockResponse>();
+                if (string.IsNullOrWhiteSpace(body?.Dek))
+                {
+                    _error = "Something went wrong — please try again.";
+                    return;
+                }
+
+                TokenStore.SetDek(body.Dek);
+                await OnUnlocked.InvokeAsync();
+                return;
+            }
+
+            switch (response.StatusCode)
+            {
+                case HttpStatusCode.Conflict:
+                    _notSet = true;
+                    _error = "No passphrase has been set for this account yet.";
+                    return;
+
+                case HttpStatusCode.Unauthorized:
+                {
+                    // M2T6 review fix (round 3): 401 is TWO verdicts. The API
+                    // sends /errors/credential-mismatch for a wrong passphrase,
+                    // but a session that could not be established (expired
+                    // access token, refresh cookie gone or revoked in another
+                    // tab) arrives as /errors/unauthorized — the passphrase was
+                    // never evaluated. Blaming it would send the user in
+                    // circles retyping a correct secret; the fix is to sign in.
+                    var problem = await ReadProblemAsync(response);
+                    if (problem?.Type is null or "/errors/unauthorized")
+                    {
+                        Nav.NavigateTo("/account/login");
+                        return;
+                    }
+
+                    _error = problem.Detail ?? "The passphrase is not valid.";
+                    return;
+                }
+
+                case HttpStatusCode.TooManyRequests:
+                    _error = "Key derivation already in progress — try again shortly.";
+                    return;
+
+                default:
+                    _error = (int)response.StatusCode >= 500
+                        ? "Something went wrong — please try again."
+                        : await ProblemReader.ReadAsync(response);
+                    return;
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        catch (OperationCanceledException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            // M2T6 review fix: the typed passphrase leaves the field on EVERY
+            // terminal outcome — including transport failures, where the old
+            // path left it rendered in the DOM.
+            _model.Passphrase = null;
+            _busy = false;
+        }
+    }
+
+    /// <summary>Parses the response body as an RFC 7807 document; null when it is not one.</summary>
+    private static async Task<ApiProblem?> ReadProblemAsync(HttpResponseMessage response)
+    {
+        string raw;
+        try
+        {
+            raw = await response.Content.ReadAsStringAsync();
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<ApiProblem>(
+                raw, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Request body of <c>POST /v1/user/account/unwrap-dek</c>.</summary>
+    private sealed class UnlockRequest
+    {
+        [JsonPropertyName("passphrase")]
+        public string? Passphrase { get; init; }
+    }
+
+    /// <summary>200 body of <c>POST /v1/user/account/unwrap-dek</c> — base64 of the 32-byte DEK.</summary>
+    private sealed class UnlockResponse
+    {
+        [JsonPropertyName("dek")]
+        public string? Dek { get; init; }
+    }
+
+    private sealed class UnlockModel
+    {
+        [Required(ErrorMessage = "The passphrase is required.")]
+        public string? Passphrase { get; set; }
+    }
+}

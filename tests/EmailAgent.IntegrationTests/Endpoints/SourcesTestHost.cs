@@ -275,6 +275,43 @@ internal static class SourcesTestHost
         return salt;
     }
 
+    /// <summary>
+    /// M2T6: plants REAL passphrase material for
+    /// <c>POST /v1/user/account/unwrap-dek</c> — Argon2id salt + params plus
+    /// the wrapped DEK produced by the factory's own
+    /// <see cref="IEncryptionService"/> — and returns the plaintext DEK
+    /// (base64, the X-User-Dek wire form) the endpoint must hand back.
+    /// <see cref="SetKdfMaterialAsync"/> only plants dummy bytes for
+    /// <c>GET /kdf</c>; these four columns are cryptographically consistent,
+    /// so the unwrap below actually authenticates. The optional
+    /// <paramref name="parameters"/> widen the Argon2id cost for tests that
+    /// need to overlap derivations (the Q-E5 busy path).
+    /// </summary>
+    public static async Task<string> SetRealKdfMaterialAsync(
+        WebApplicationFactory<Program> factory,
+        Guid userId,
+        string passphrase,
+        KdfParams? parameters = null)
+    {
+        parameters ??= KdfParams.Default();
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<EmailAgentDbContext>();
+        var encryption = scope.ServiceProvider.GetRequiredService<IEncryptionService>();
+        var user = await db.Users.SingleAsync(u => u.Id == userId);
+
+        var salt = RandomNumberGenerator.GetBytes(16);
+        var wrapped = encryption.GenerateAndWrapDek(userId, passphrase, salt, parameters);
+
+        user.KdfSalt = salt;
+        user.KdfParams = JsonSerializer.SerializeToDocument(parameters);
+        user.DekWrapped = wrapped.Wrapped;
+        user.DekNonce = wrapped.Nonce;
+        await db.SaveChangesAsync();
+
+        return Convert.ToBase64String(wrapped.Dek);
+    }
+
     // -----------------------------------------------------------------------
     // Problem-document assertions
     // -----------------------------------------------------------------------

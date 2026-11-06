@@ -3,17 +3,23 @@
 CRUD, connection test, and fetch-now endpoints for a user's mail sources. Introduced in
 [M2T5](../../plans/implementation/M2T5-sources-api-endpoints-crud.md); built on the M2T1/M2T3
 connector framework (`IMessageSource`, `IPluginRegistry`) and the `SourceService` layer and
-`processed_messages` dedupe table introduced by this task.
+`processed_messages` dedupe table introduced by this task. The passphrase → DEK unlock endpoint
+(`POST /v1/user/account/unwrap-dek`) and the SPA-side `X-User-Dek` plumbing were added by
+[M2T6](../../plans/implementation/M2T6-sources-spa-screens.md) under amendment R2.
 
-All routes require a bearer token with the `User` role (`RequireRole("User")`) and act on the
-**caller's own sources only** — every query filters by `user_id` taken from the token, never from
-the request. Admin routes live under `/v1/admin/*` (see `plans/01-architecture.md` §9).
+All `/v1/user/sources*` routes require a bearer token with the `User` role (`RequireRole("User")`)
+and act on the **caller's own sources only** — every query filters by `user_id` taken from the
+token, never from the request. The companion `/v1/user/account/*` routes (`kdf`, `unwrap-dek`)
+require an authenticated, non-disabled account and likewise resolve the caller's own row from the
+token: no role claim is demanded there, and nothing in that namespace reads or writes another
+account. Admin routes live under `/v1/admin/*` (see `plans/01-architecture.md` §9).
 
 ## Endpoints
 
 | Method | Route | Success | Notes |
 |---|---|---|---|
-| `GET` | `/v1/user/account/kdf` | `200 {kdf_salt, kdf_params}` | Caller's KDF material so the browser can derive the DEK (Argon2id over `users.kdf_salt` + `kdf_params`). `409 /errors/passphrase-not-set` when no passphrase is set yet. Read-only, not audited. |
+| `GET` | `/v1/user/account/kdf` | `200 {kdf_salt, kdf_params}` | Caller's KDF material (Argon2id over `users.kdf_salt` + `kdf_params`) for tooling that inspects or regenerates KDF parameters. **Unused by the SPA since amendment R2** — the browser no longer derives the DEK itself; see `unwrap-dek` below. `409 /errors/passphrase-not-set` when no passphrase is set yet. Read-only, not audited. |
+| `POST` | `/v1/user/account/unwrap-dek` | `200 {dek}` | **Amendment R2 (M2T6).** Body `{"passphrase": "…"}` (whole body capped at 4 KiB); the server derives the KEK with Argon2id and unwraps `users.dek_wrapped`, answering with the raw 32-byte DEK as base64 under `Cache-Control: no-store` — the only way the M2 SPA obtains a DEK. Ordered failures: `401 /errors/unauthorized` when the token's account no longer exists, then `403` disabled account, then `409 /errors/passphrase-not-set` **before the body is read**, then `400 /errors/validation` with `errors[].name = "passphrase"` for a missing, malformed, empty, or over-size body, then `429` + `Retry-After: 1` `/errors/rate-limited` while another unwrap for the same user is in flight, then `401 /errors/credential-mismatch` for a wrong passphrase (audited as `dek_unwrap_failed`; a successful unwrap is not audited). |
 | `GET` | `/v1/user/sources` | `200 {items, next_cursor?}` | Keyset cursor pagination; filters `type_id`, `status`. Never 204 — an empty caller has `"items": []`. |
 | `POST` | `/v1/user/sources` | `201` + `Location: /v1/user/sources/{id}` | Schema-gates the config against the plugin's `ConfigSchema`; `400 /errors/plugin-not-registered` for an unknown `type_id`. |
 | `GET` | `/v1/user/sources/{id}` | `200` | `404 /errors/source-not-found` for other users' ids — **never 403** (no existence oracle). |
@@ -24,10 +30,14 @@ the request. Admin routes live under `/v1/admin/*` (see `plans/01-architecture.m
 
 ### Authentication and the `X-User-Dek` header (M2-only transport)
 
-Source configs are stored encrypted under a **user-owned data encryption key (DEK)**: the API
-receives the DEK from the browser, which derives the KEK from the passphrase and unwraps
-`users.dek_wrapped` locally; the service never learns the passphrase. Endpoints that **read or
-write the encrypted config blob** require the header `X-User-Dek: <base64 of the raw 32-byte DEK>`:
+Source configs are stored encrypted under a **user-owned data encryption key (DEK)**: since
+amendment R2 (M2T6) the browser obtains the DEK by POSTing the passphrase to
+`POST /v1/user/account/unwrap-dek`, which unwraps `users.dek_wrapped` server-side and returns
+`200 { "dek": "<base64 32 bytes>" }`; the SPA keeps it in memory only (`TokenStore.DekStore`,
+lost on refresh → re-prompted) and the passphrase is discarded with the request. Endpoints that
+**read or write the encrypted config blob** require the header `X-User-Dek: <base64 of the raw
+32-byte DEK>` (the M2 SPA stamps it on `/v1/user/sources*` requests only — login, refresh,
+`unwrap-dek` and admin calls never carry a key):
 
 | Endpoint | `X-User-Dek` |
 |---|---|
@@ -39,14 +49,16 @@ write the encrypted config blob** require the header `X-User-Dek: <base64 of the
 | `POST /v1/user/sources/test-connection` | not required (nothing stored or read) |
 | `DELETE /v1/user/sources/{id}` | not required (nothing decrypted) |
 | `GET /v1/user/account/kdf` | not required |
+| `POST /v1/user/account/unwrap-dek` | not required (it *returns* the DEK) |
 
 Missing, non-base64, or wrong-length values are rejected with `400` and problem detail type
 `/errors/validation`, `errors[].name = "x-user-dek"`. A well-formed but **wrong** key (rotated, or
 belonging to another account) fails the GCM tag on unwrap → `400 /errors/dek-invalid`.
 
-> **M2-only:** the header is a milestone-M2 transport convenience (SQ-M2-1), documented as
-> transitional — M5 replaces it with the session-key envelope. Nothing outside M2 should depend
-> on it.
+> **M2-only:** both the header and the `unwrap-dek` round-trip are milestone-M2 transport
+> conveniences (SQ-E9 / task Risks SQ-M2-1), documented as transitional — M5 replaces them with
+> the session-key envelope (the SPA derives the DEK once after login; the header disappears).
+> Nothing outside M2 should depend on either.
 
 ### Validation and RFC 7807 problem types
 
@@ -58,13 +70,15 @@ and `reason` the human-readable constraint (e.g. `must be between 1 and 65535`).
 |---|---|---|
 | `/errors/unauthorized` | 401 | Anonymous or dead-account token. |
 | `/errors/forbidden` | 403 | Wrong role, or a disabled account. |
-| `/errors/validation` | 400 | Request shape, `X-User-Dek`, body JSON, cursor, `limit`, or `status` (`errors[].name` = offending member: `config`, `interval_minutes`, `type_id`, `x-user-dek`, `cursor`, `limit`, `status`, `body`). |
+| `/errors/validation` | 400 | Request shape, `X-User-Dek`, body JSON, cursor, `limit`, or `status` (`errors[].name` = offending member: `config`, `interval_minutes`, `type_id`, `x-user-dek`, `cursor`, `limit`, `status`, `passphrase`, `body`). |
 | `/errors/config-validation` | 400 | Config fails the plugin's `ConfigSchema` — raised **before any socket is opened** (e.g. `port: 99999`). |
 | `/errors/plugin-not-registered` | 400 | `type_id` not offered by any registered plugin. |
 | `/errors/dek-invalid` | 400 | `X-User-Dek` does not unwrap this source's config blob. |
+| `/errors/credential-mismatch` | 401 | `POST /v1/user/account/unwrap-dek` with a wrong passphrase — detail "The passphrase is not valid."; audited as `dek_unwrap_failed`. Distinct from `/errors/unauthorized`, which is a token problem. |
 | `/errors/source-not-found` | 404 | Missing id **or another user's id** (indistinguishable by design). |
 | `/errors/conflict` | 409 | `DELETE` on a source that still has `processed_messages` rows. |
-| `/errors/passphrase-not-set` | 409 | `GET /v1/user/account/kdf` before the first-login passphrase flow. |
+| `/errors/passphrase-not-set` | 409 | `POST /v1/user/account/unwrap-dek` (or `GET /v1/user/account/kdf`) before the first-login passphrase flow; raised before the unwrap body is read. |
+| `/errors/rate-limited` | 429 | `unwrap-dek` while another unwrap for the same user is in flight (or the authenticated window is exhausted); carries `Retry-After: 1` on the busy path. |
 | `/errors/source-connection-failed` | 500 | The plugin's connection test threw an unclassifiable exception (expected failures never get here). |
 | `/errors/internal-blob-missing` | 500 | Source row/blob mismatch (integrity alarm). |
 | `/errors/internal` | 500 | Anything untyped. |
@@ -149,29 +163,48 @@ metadata carries only `type_id`/`ok`. No row ever contains a config document or 
 Reads are not audited. Rows join the same transaction as the data change (`AuditLogger` joins
 the ambient transaction), so a rollback never leaves a phantom entry.
 
+The companion `POST /v1/user/account/unwrap-dek` (M2T6) is audited **on failure only**:
+`dek_unwrap_failed` with `target_type='user'`, `target_id` = the caller's id, and empty metadata
+(`{}`) — never the passphrase, KEK, or DEK. A successful unwrap writes no audit row.
+
+> **Known limitation (M2):** the 4 KiB body cap applies to *every* unwrap, including passphrases
+> set before M2T6, when `set-passphrase` had no 512-character ceiling. A stored passphrase whose
+> JSON-escaped form exceeds the cap can therefore never be unwrapped in M2 — `set-passphrase`
+> answers `409 /errors/passphrase-already-set`, and re-wrap is M6a. Recorded rather than
+> worked around: no M2 endpoint may rewrite `users.dek_wrapped` without a valid KEK. Accounts set
+> through the M2 form are unaffected (512 characters escape to well under 4 KiB).
+
 ### Example
 
 ```bash
-# 1. Fetch the KDF material (the browser derives the DEK with Argon2id).
+# 1. Unlock (amendment R2): exchange the passphrase for the DEK — the SPA's only source of it.
+DEK=$(curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"passphrase":"correct horse battery staple"}' \
+  https://host/v1/user/account/unwrap-dek | jq -r '.dek')
+# Wrong passphrase -> 401 /errors/credential-mismatch; no passphrase set yet -> 409 /errors/passphrase-not-set;
+# missing/empty/oversized body -> 400 /errors/validation (errors[].name = "passphrase";
+# the body is capped at 4 KiB, and the shared passphrase validator caps the value at 512 characters).
+
+# 2. Optional: inspect the KDF parameters (the SPA no longer derives a DEK in the browser).
 curl -sS -H "Authorization: Bearer $TOKEN" https://host/v1/user/account/kdf
 
-# 2. List a page of 2 (next_cursor is URL-safe and echoed verbatim; absent = last page).
+# 3. List a page of 2 (next_cursor is URL-safe and echoed verbatim; absent = last page).
 curl -sS -H "Authorization: Bearer $TOKEN" -H "X-User-Dek: $DEK" \
   "https://host/v1/user/sources?limit=2"
 # …then follow the cursor: "https://host/v1/user/sources?limit=2&cursor=$NEXT_CURSOR"
 
-# 3. Create, then read back — no password field in either response.
+# 4. Create, then read back — no password field in either response.
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "X-User-Dek: $DEK" \
   -H "Content-Type: application/json" \
   -d '{"type_id":"imap","display_name":"home","config":{"host":"imap.local","port":143,"use_ssl":false,"username":"a","password":"p","mailbox":"INBOX"}}' \
   https://host/v1/user/sources
 
-# 4. Test a config before saving it (200 even on failure — read `ok`).
+# 5. Test a config before saving it (200 even on failure — read `ok`).
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"type_id":"imap","config":{"host":"imap.local","port":143,"use_ssl":false,"username":"a","password":"p","mailbox":"INBOX"}}' \
   https://host/v1/user/sources/test-connection
 
-# 5. Fetch now (manual exerciser; DEK required).
+# 6. Fetch now (manual exerciser; DEK required).
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "X-User-Dek: $DEK" \
   https://host/v1/user/sources/$ID/fetch-now
 ```
@@ -187,4 +220,5 @@ anywhere on these paths.
 - Design source of truth: [`../../plans/01-architecture.md`](../../plans/01-architecture.md) §6
   (service layer), §9 (API), §10 (data), §13.1–§13.7 (model, schema, checklist).
 - Task contract: [`../../plans/implementation/M2T5-sources-api-endpoints-crud.md`](../../plans/implementation/M2T5-sources-api-endpoints-crud.md).
+- SPA screens + unlock endpoint (amendment R2): [`../../plans/implementation/M2T6-sources-spa-screens.md`](../../plans/implementation/M2T6-sources-spa-screens.md).
 - Milestone: [`../../plans/implementation/M2-connector-framework-and-imap-source-plugin.md`](../../plans/implementation/M2-connector-framework-and-imap-source-plugin.md).

@@ -9,7 +9,10 @@ namespace EmailAgent.Spa.Auth;
 /// silent refresh (<see cref="RefreshCookieAuthenticator"/>, which posts the
 /// httpOnly <c>ea_refresh</c> cookie through the same-origin refresh path)
 /// before retrying the original request once with the fresh token. The retry
-/// never re-enters the refresh branch, so a persistent 401 cannot loop.
+/// never re-enters the refresh branch, so a persistent 401 cannot loop, and a
+/// 401 that is a verdict on a credential the caller just sent (the M2T6
+/// unwrap-dek passphrase, a login password) is never refreshed or retried —
+/// while a JwtBearer challenge for an expired token still is.
 /// </summary>
 public sealed class BearerTokenHandler : DelegatingHandler
 {
@@ -44,6 +47,23 @@ public sealed class BearerTokenHandler : DelegatingHandler
             return response;
         }
 
+        // M2T6 review fix (WARNING, round 1): a 401 from a credential-checking
+        // endpoint means "that secret is wrong", not "this token is stale".
+        // Refreshing and re-sending would run the expensive Argon2id unwrap
+        // twice, write two dek_unwrap_failed audit rows for one typo, and
+        // rotate the refresh cookie on a failed passphrase guess.
+        //
+        // Round 2 refined this: the *route* alone cannot decide. An expired
+        // access token reaching the same route produces a JwtBearer
+        // **challenge** — Program.cs's OnChallenge sets `WWW-Authenticate:
+        // Bearer`, which no endpoint-authored problem document carries — and
+        // that 401 genuinely is "stale token": refreshing it lets a correct
+        // passphrase succeed instead of being misreported as wrong.
+        if (IsCredentialVerdict(request) && !IsTokenChallenge(response))
+        {
+            return response;
+        }
+
         // Stale/expired access token: one silent refresh (cookie flow), then
         // retry this request exactly once with the new token. A 401 on the
         // retried copy is returned as-is (no refresh loop).
@@ -67,6 +87,39 @@ public sealed class BearerTokenHandler : DelegatingHandler
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
         }
     }
+
+    /// <summary>
+    /// True for the routes whose 401 may be a <b>verdict on a credential the
+    /// caller just supplied</b> (a passphrase or a password) rather than on
+    /// the access token. Those must be surfaced to the user exactly once: a
+    /// refresh-retry would re-post the same secret (two Argon2id unwraps, two
+    /// audit rows, one needless cookie rotation) for a result that is already
+    /// final. See <see cref="SendCoreAsync"/>: the response still decides —
+    /// a JwtBearer challenge on the same route means the token, not the
+    /// secret, is the problem.
+    /// </summary>
+    private static bool IsCredentialVerdict(HttpRequestMessage request)
+    {
+        var path = request.RequestUri?.AbsolutePath;
+        if (string.IsNullOrEmpty(path))
+        {
+            return false;
+        }
+
+        return path.EndsWith("/unwrap-dek", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith("/v1/account/login", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith("/v1/account/otp-login", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// True when the 401 is an authentication <b>challenge</b> (missing,
+    /// expired or otherwise rejected access token): the API's JwtBearer
+    /// <c>OnChallenge</c> stamps <c>WWW-Authenticate: Bearer</c> before it
+    /// writes its problem document, while an endpoint's own 401 (wrong
+    /// passphrase, dead account) never sets the header.
+    /// </summary>
+    private static bool IsTokenChallenge(HttpResponseMessage response)
+        => response.Headers.Contains("WWW-Authenticate");
 
     /// <summary>
     /// Deep-copies a request so it can be sent again (method, headers,

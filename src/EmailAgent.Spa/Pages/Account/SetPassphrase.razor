@@ -8,9 +8,10 @@
 <div class="auth-card">
     <h1>Set your passphrase</h1>
     <p class="hint">
-        Your passphrase encrypts your key on this device. It is never sent to
-        the server and cannot be recovered — choose at least 12 characters you
-        will remember.
+        Your passphrase derives the key that encrypts your data. It is sent to
+        the server only for the requests that need it — setting it here, and
+        unlocking this session later — and is never stored, so it cannot be
+        recovered. Choose 12 to 512 characters you will remember.
     </p>
 
     <EditForm Model="@_model" OnValidSubmit="@SubmitAsync" FormName="set-passphrase">
@@ -95,6 +96,7 @@
     {
         [Required(ErrorMessage = "The passphrase is required.")]
         [MinLength(12, ErrorMessage = "The passphrase must be at least 12 characters.")]
+        [MaxLength(512, ErrorMessage = "The passphrase must be at most 512 characters.")]
         public string? Passphrase { get; set; }
 
         [Required(ErrorMessage = "The passphrase confirmation is required.")]

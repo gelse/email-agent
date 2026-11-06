@@ -1,5 +1,7 @@
 using EmailAgent.Spa;
 using EmailAgent.Spa.Auth;
+using EmailAgent.Spa.Notifications;
+using EmailAgent.Spa.Sources;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
@@ -35,9 +37,14 @@ builder.Services.AddAuthorizationCore(options =>
 
 // "Api" client: bearer header from the token store; on 401 one silent
 // refresh through the cookie path, then a single retry (BearerTokenHandler).
+// M2T6: DekHeaderHandler rides inside it so the M2-only X-User-Dek header is
+// attached to every sources request whenever the session holds a key; the
+// 401-retry clone re-passes through it, so the header survives the refresh.
 builder.Services.AddTransient<BearerTokenHandler>();
+builder.Services.AddTransient<DekHeaderHandler>();
 builder.Services.AddHttpClient("Api", c => c.BaseAddress = new Uri(apiBaseUrl))
-    .AddHttpMessageHandler<BearerTokenHandler>();
+    .AddHttpMessageHandler<BearerTokenHandler>()
+    .AddHttpMessageHandler<DekHeaderHandler>();
 // Pages inject the default HttpClient — bound to the "Api" configuration.
 builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("Api"));
 
@@ -47,6 +54,11 @@ builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().Cre
 builder.Services.AddHttpClient(RefreshCookieAuthenticator.ClientName,
     c => c.BaseAddress = new Uri(apiBaseUrl));
 builder.Services.AddSingleton<RefreshCookieAuthenticator>();
+
+// M2T6: the in-memory toast bus (singleton — one queue for every page, no JS
+// interop) and the typed sources client bound to the "Api" chain above.
+builder.Services.AddSingleton<ToastService>();
+builder.Services.AddScoped(sp => new SourcesClient(sp.GetRequiredService<HttpClient>()));
 
 var host = builder.Build();
 

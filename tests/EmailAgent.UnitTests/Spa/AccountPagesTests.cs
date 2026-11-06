@@ -73,6 +73,43 @@ public class AccountPagesTests
         ctx.Nav.Uri.Should().Be("http://localhost/admin/users");
     }
 
+    /// <summary>
+    /// M2T6 review fix (round 1 CRITICAL, pinned here for the primary path):
+    /// a sign-in is a new principal — the DEK cached by a previous session
+    /// must not survive into this one (it would be sent as X-User-Dek for
+    /// another account's sources, and no re-wrap path exists in M2).
+    /// </summary>
+    [Fact]
+    public void Login_Form_Success_DropsPreCachedDek()
+    {
+        using var ctx = new SpaTestContext();
+        ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
+        ctx.Store.DekStore.SetDek("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+        ctx.Handler.Responder = (request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/v1/account/login")
+            {
+                var token = SpaTestContext.FakeJwt(role: "User");
+                return Task.FromResult(SpaTestContext.Json(
+                    $"{{\"access_token\":\"{token}\",\"expires_in\":900,\"must_complete_first_login\":false}}"));
+            }
+
+            return Task.FromResult(SpaTestContext.Json("{}"));
+        };
+
+        var cut = ctx.RenderComponent<Login>();
+        cut.Find("#email").Change("alice@example.test");
+        cut.Find("#password").Change("Sup3rSecret!pass");
+        cut.Find("button[type=submit]").Click();
+
+        cut.WaitForAssertion(() => ctx.Store.AccessToken.Should().NotBeNull(
+            "the new session's token replaced the old one"));
+
+        ctx.Store.DekStore.IsEmpty.Should().BeTrue(
+            "a new principal must never inherit the previous session's key");
+        ctx.Store.DekStore.DekBase64.Should().BeNull();
+    }
+
     [Fact]
     public void Login_Form_InvalidCredentials_ShowsProblemDetails()
     {
@@ -94,6 +131,36 @@ public class AccountPagesTests
             "a failed login must not populate the token store");
         ctx.Nav.Uri.Should().Be("http://localhost/",
             "no routing happens on bad credentials");
+    }
+
+    /// <summary>
+    /// The OTP sign-in path is a sign-in too: it must drop a pre-cached DEK
+    /// exactly like the password path (M2T6 round-1 CRITICAL, both callers).
+    /// </summary>
+    [Fact]
+    public void OtpLogin_Form_Success_DropsPreCachedDek()
+    {
+        using var ctx = new SpaTestContext();
+        ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
+        ctx.Store.DekStore.SetDek("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+        ctx.Handler.Responder = (request, _) =>
+            request.RequestUri!.AbsolutePath == "/v1/account/otp-login"
+                ? Task.FromResult(SpaTestContext.Json(
+                    $"{{\"access_token\":\"{SpaTestContext.FakeJwt(role: "User")}\",\"expires_in\":900,\"must_complete_first_login\":true}}"))
+                : Task.FromResult(SpaTestContext.Json("{}"));
+
+        var cut = ctx.RenderComponent<OtpLogin>();
+        cut.Find("#otp-email").Change("alice@example.test");
+        cut.Find("#otp").Change("123456");
+        cut.Find("button[type=submit]").Click();
+
+        cut.WaitForAssertion(() => ctx.Store.AccessToken.Should().NotBeNull(
+            "the OTP exchange stored the new access token"));
+
+        ctx.Store.DekStore.IsEmpty.Should().BeTrue(
+            "an OTP sign-in is a new principal as well — no inherited key");
+        ctx.Nav.Uri.Should().Be("http://localhost/account/change-password",
+            "the OTP flow always continues into the first-login passphrase setup (Q-E6)");
     }
 
     // -----------------------------------------------------------------

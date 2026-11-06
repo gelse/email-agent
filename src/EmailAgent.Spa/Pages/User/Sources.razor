@@ -1,0 +1,559 @@
+@page "/user/sources"
+@attribute [Authorize(Roles = "User,Admin")]
+@inject SourcesClient SourcesApi
+@inject TokenStore TokenStore
+@inject JwtRoleParser RoleParser
+@inject NavigationManager Nav
+@inject ToastService Toasts
+
+@* M2T6: the user's sources screen. Order of gates: client-side role check on
+   the JWT (routing source of truth in the SPA), then the M2-only DEK gate —
+   without a cached key the table stays hidden behind PassphrasePrompt (SQ-12,
+   adjudication R2: the key is unwrapped server-side and cached in
+   TokenStore.DekStore, never derived in the browser). *@
+<PageTitle>Sources — Email Agent</PageTitle>
+
+@if (!_authorized)
+{
+    @* Role gate failed: OnInitializedAsync is already navigating to login. *@
+}
+else if (!_unlocked)
+{
+    <h1>Sources</h1>
+
+    @* Re-locking (dek-invalid) must explain itself: this branch has no table
+       to hang an inline error on, so the banner renders above the prompt. *@
+    @if (_error is not null)
+    {
+        <div class="error-box" id="sources-error" role="alert">@_error</div>
+    }
+
+    <PassphrasePrompt OnUnlocked="OnUnlockedAsync" />
+}
+else
+{
+    <h1>Sources</h1>
+
+    @if (_error is not null)
+    {
+        <div class="error-box" id="sources-error" role="alert">@_error</div>
+    }
+
+    <div class="toolbar">
+        <button type="button" class="btn-primary" id="add-source-open"
+                @onclick="OpenAddDialog">Add source</button>
+        <button type="button" class="btn-secondary" id="sources-reload"
+                disabled="@_loading" @onclick="() => LoadAsync()">Reload</button>
+    </div>
+
+    @if (_loading)
+    {
+        <p>Loading…</p>
+    }
+    else if (!_loaded)
+    {
+        @* First page never arrived (round 4, NIT): the banner above is the
+           whole content — neither the empty state ("add one to start
+           fetching mail") nor a table may render next to a load failure. *@
+    }
+    else if (_sources.Count == 0)
+    {
+        @if (_error is null)
+        {
+            <p id="sources-empty">No sources yet. Add one to start fetching mail.</p>
+        }
+    }
+    else
+    {
+        <table class="source-table" id="sources-table">
+            <thead>
+                <tr>
+                    <th scope="col">Display name</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Interval (min)</th>
+                    <th scope="col">Last run</th>
+                    <th scope="col">Next run</th>
+                    <th scope="col"><span class="visually-hidden">Actions</span></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var source in _sources)
+                {
+                    <tr @key="source.Id">
+                        <td>@source.DisplayName</td>
+                        <td>@source.TypeId</td>
+                        <td>@source.Status</td>
+                        <td>@source.IntervalMinutes</td>
+                        <td>@FormatTime(source.LastRunAt)</td>
+                        <td>@FormatTime(source.NextRunAt)</td>
+                        <td class="source-actions">
+                            <button type="button" class="btn-secondary" id="@EditButtonId(source.Id)"
+                                    @onclick="() => OpenEditDialog(source.Id)">Edit</button>
+                            <button type="button" class="btn-secondary" id="@TestButtonId(source.Id)"
+                                    @onclick="() => OpenRowTest(source)">Test connection</button>
+                            <button type="button" class="btn-secondary" id="@FetchButtonId(source.Id)"
+                                    disabled="@(_busyRow == source.Id)"
+                                    @onclick="() => FetchNowAsync(source)">Fetch now</button>
+                            <button type="button" class="btn-secondary" id="@DeleteButtonId(source.Id)"
+                                    @onclick="() => _deleteTarget = source">Delete</button>
+                        </td>
+                    </tr>
+
+                    @if (_testRowId == source.Id)
+                    {
+                        <tr class="row-test-panel">
+                            <td colspan="7">
+                                @if (_rowTestError is not null)
+                                {
+                                    <div class="error-box" id="row-test-error" role="alert">@_rowTestError</div>
+                                }
+                                <div class="row-test-form">
+                                    <label for="row-test-password">Password for '@source.DisplayName'</label>
+                                    <input id="row-test-password" type="password" class="form-control"
+                                           @bind="_rowTestPassword" autocomplete="off" />
+                                    <button type="button" class="btn-primary" id="row-test-submit"
+                                            disabled="@(_busyRow == source.Id)" @onclick="() => RunRowTestAsync(source)">
+                                        @(_busyRow == source.Id ? "Testing…" : "Test")
+                                    </button>
+                                    <button type="button" class="btn-secondary" id="row-test-cancel"
+                                            @onclick="CloseRowTest">Cancel</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    }
+
+    @if (!_loading && _nextCursor is not null)
+    {
+        @* M2T6 review fix (round 3): the list is a keyset page (§13.13) —
+           without this control everything past the first 25 sources would be
+           invisible, uneditable and undeletable. *@
+        <button type="button" class="btn-secondary" id="sources-load-more"
+                @onclick="LoadMoreAsync">Load more</button>
+    }
+
+    @if (_showAdd || _editId is not null)
+    {
+        <EditSourceDialog SourceId="@_editId"
+                          OnCancel="CloseDialogs"
+                          OnSaved="OnSavedAsync" />
+    }
+
+    @if (_deleteTarget is not null)
+    {
+        <DeleteSourceConfirm Source="@_deleteTarget"
+                             OnCancel="() => _deleteTarget = null"
+                             OnDeleted="OnDeletedAsync" />
+    }
+}
+
+@code {
+    private bool _authorized;
+    private bool _unlocked;
+    private bool _loading;
+    private bool _showAdd;
+    private Guid? _editId;
+    private SourceDto? _deleteTarget;
+
+    private List<SourceDto> _sources = new();
+
+    /// <summary>
+    /// Whether the first keyset page actually arrived. Without it a FAILED
+    /// first load (500, transport, 403) still rendered the empty state next
+    /// to the error banner — inviting the user to create a source that may
+    /// already exist (round 4, NIT).
+    /// </summary>
+    private bool _loaded;
+
+    /// <summary>Cursor of the next keyset page; null while the loaded page is the last one.</summary>
+    private string? _nextCursor;
+
+    /// <summary>The row whose inline connection-test panel is open (deviation: option 3).</summary>
+    private Guid? _testRowId;
+    private string? _rowTestPassword;
+    private string? _rowTestError;
+    private Guid? _busyRow;
+
+    private string? _error;
+
+    /// <summary>
+    /// Role gate first (User or Admin — the JWT claim decides, no API call for
+    /// routing), then the DEK gate: with no cached key the prompt renders and
+    /// the table stays out of the markup entirely. The list loads only once
+    /// the session is unlocked.
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        var token = TokenStore.AccessToken;
+        var roles = token is null
+            ? Array.Empty<string>()
+            : RoleParser.GetRoles(token);
+        if (!roles.Contains("User") && !roles.Contains("Admin"))
+        {
+            Nav.NavigateTo("/account/login");
+            return;
+        }
+
+        _authorized = true;
+        _unlocked = !TokenStore.DekStore.IsEmpty;
+        if (_unlocked)
+        {
+            await LoadAsync();
+        }
+    }
+
+    /// <summary>Raised by the prompt once the server handed back the DEK.</summary>
+    private async Task OnUnlockedAsync()
+    {
+        _unlocked = true;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        // M2T6 review fix (round 3): the store is the source of truth for the
+        // DEK gate, not this page's _unlocked flag. A TokenStore.SignIn in
+        // another tab (the shared ea_refresh cookie signing someone else in)
+        // clears DekStore while THIS page still believes it is unlocked —
+        // without this check every later request would go out without a key
+        // and the table would sit in a permanent error state until an F5.
+        if (!EnsureUnlocked())
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        try
+        {
+            var page = await SourcesApi.ListAsync(cursor: null);
+            _sources = page.Items;
+            _nextCursor = page.NextCursor;
+            _loaded = true;
+        }
+        catch (SourcesApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (SourcesApiException ex) when (IsDekRejected(ex))
+        {
+            // M2T6 review fix (belt-and-braces): the cached key does not open
+            // this account's blobs (a key that outlived an account switch, or
+            // a rotated key) — drop it and fall back to the unlock prompt
+            // instead of leaving a dead end that never recovers. The message
+            // is rendered in the locked branch: the table it would sit above
+            // is gone by then.
+            Relock("Your cached key does not unlock this account's saved sources. "
+                + "Enter your passphrase again to continue.");
+        }
+        catch (SourcesApiException ex)
+        {
+            // 403 (disabled account / role drift) stays inline: bouncing an
+            // authenticated Admin off a strict "User" group would hide the cause.
+            _error = ex.Status == HttpStatusCode.Forbidden
+                ? $"You are not allowed to view sources. {ex.Message}"
+                : ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>
+    /// Fetches the next keyset page and appends it (round 3: the first page
+    /// alone silently hid every source past <c>limit=25</c>).
+    /// </summary>
+    private async Task LoadMoreAsync()
+    {
+        if (string.IsNullOrEmpty(_nextCursor) || !EnsureUnlocked())
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        try
+        {
+            var page = await SourcesApi.ListAsync(cursor: _nextCursor);
+            _sources.AddRange(page.Items);
+            _nextCursor = page.NextCursor;
+            _loaded = true;
+        }
+        catch (SourcesApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (SourcesApiException ex) when (IsDekRejected(ex))
+        {
+            Relock("Your cached key does not unlock this account's saved sources. "
+                + "Enter your passphrase again to continue.");
+        }
+        catch (SourcesApiException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>
+    /// <c>true</c> when the API rejected the <c>X-User-Dek</c> header itself:
+    /// either the dedicated <c>/errors/dek-invalid</c> verdict, or the
+    /// validation problem naming <c>x-user-dek</c> (a request that went out
+    /// with no usable key). Both mean "re-lock and ask for the passphrase",
+    /// never "show an inline error forever".
+    /// </summary>
+    private static bool IsDekRejected(SourcesApiException ex)
+        => ex.Status == HttpStatusCode.BadRequest && (
+            ex.Problem?.Type == "/errors/dek-invalid"
+            || (ex.Problem?.Type == "/errors/validation"
+                && ex.FieldErrors.Any(entry => entry.Name == "x-user-dek")));
+
+    /// <summary>
+    /// Drops the cached key, empties the table and returns the page to the
+    /// locked branch with an explanatory banner (the locked branch is where
+    /// <c>#sources-error</c> renders).
+    /// </summary>
+    private void Relock(string message)
+    {
+        TokenStore.DekStore.Clear();
+        _sources.Clear();
+        _loaded = false;
+        _nextCursor = null;
+        _testRowId = null;
+
+        // Round 4, NIT: the row-test mini-form holds a typed mailbox
+        // password — a re-lock must drop it along with the key, not leave a
+        // credential sitting in a live component field.
+        _rowTestPassword = null;
+        _rowTestError = null;
+        _busyRow = null;
+
+        _deleteTarget = null;
+        _showAdd = false;
+        _editId = null;
+        _unlocked = false;
+        _loading = false;
+        _error = message;
+    }
+
+    /// <summary>
+    /// Gate every unlock-dependent action: the store, not <c>_unlocked</c>,
+    /// decides. When the key vanished (another tab re-signed-in) the page
+    /// re-locks instead of firing a request that would go out without
+    /// <c>X-User-Dek</c>.
+    /// </summary>
+    private bool EnsureUnlocked()
+    {
+        if (!TokenStore.DekStore.IsEmpty)
+        {
+            return true;
+        }
+
+        Relock("Your session no longer has an unlock key. "
+            + "Enter your passphrase again to continue.");
+        return false;
+    }
+
+    private void OpenAddDialog()
+    {
+        if (!EnsureUnlocked())
+        {
+            return;
+        }
+
+        _showAdd = true;
+    }
+
+    private void OpenEditDialog(Guid id)
+    {
+        if (!EnsureUnlocked())
+        {
+            return;
+        }
+
+        _showAdd = false;
+        _editId = id;
+    }
+
+    private void CloseDialogs()
+    {
+        _showAdd = false;
+        _editId = null;
+    }
+
+    private async Task OnSavedAsync(SourceDto _)
+    {
+        CloseDialogs();
+        await LoadAsync();
+    }
+
+    private async Task OnDeletedAsync()
+    {
+        var name = _deleteTarget?.DisplayName;
+        _deleteTarget = null;
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            Toasts.ShowSuccess($"Source '{name}' deleted.");
+        }
+
+        await LoadAsync();
+    }
+
+    // -----------------------------------------------------------------
+    // Row-level connection test (deviation, option 3): the button reveals an
+    // inline password mini-form; the candidate config is the row's projection
+    // plus the typed password, so a stored password is never echoed back into
+    // the DOM.
+    // -----------------------------------------------------------------
+
+    private void OpenRowTest(SourceDto source)
+    {
+        if (!EnsureUnlocked())
+        {
+            return;
+        }
+
+        _testRowId = source.Id;
+        _rowTestPassword = null;
+        _rowTestError = null;
+    }
+
+    private void CloseRowTest()
+    {
+        _testRowId = null;
+        _rowTestPassword = null;
+        _rowTestError = null;
+    }
+
+    private async Task RunRowTestAsync(SourceDto source)
+    {
+        if (!EnsureUnlocked())
+        {
+            return;
+        }
+
+        _rowTestError = null;
+        if (string.IsNullOrWhiteSpace(_rowTestPassword))
+        {
+            _rowTestError = "Enter the mailbox password to test this connection.";
+            return;
+        }
+
+        _busyRow = source.Id;
+        try
+        {
+            var outcome = await SourcesApi.TestConnectionAsync(new TestConnectionRequest
+            {
+                TypeId = source.TypeId,
+                Config = BuildRowConfig(source, _rowTestPassword),
+            });
+
+            if (outcome.Ok)
+            {
+                Toasts.ShowSuccess($"Connection to '{source.DisplayName}' succeeded.");
+                CloseRowTest();
+            }
+            else
+            {
+                _rowTestError = outcome.Error ?? "The connection test failed.";
+            }
+        }
+        catch (SourcesApiException ex) when (IsDekRejected(ex))
+        {
+            Relock("Your cached key does not unlock this account's saved sources. "
+                + "Enter your passphrase again to continue.");
+        }
+        catch (SourcesApiException ex)
+        {
+            _rowTestError = ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            _rowTestError = "Could not reach the API.";
+        }
+        finally
+        {
+            _busyRow = null;
+        }
+    }
+
+    /// <summary>The row's stored config (never a password) plus the candidate password just typed.</summary>
+    private static Dictionary<string, object?> BuildRowConfig(SourceDto source, string password)
+    {
+        var config = source.Config;
+        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["host"] = config.Host ?? string.Empty,
+            ["port"] = config.Port ?? 993,
+            ["use_ssl"] = config.UseSsl ?? true,
+            ["username"] = config.Username ?? string.Empty,
+            ["password"] = password,
+            ["mailbox"] = string.IsNullOrWhiteSpace(config.Mailbox) ? "INBOX" : config.Mailbox,
+        };
+    }
+
+    private async Task FetchNowAsync(SourceDto source)
+    {
+        if (!EnsureUnlocked())
+        {
+            return;
+        }
+
+        _busyRow = source.Id;
+        _error = null;
+        try
+        {
+            var result = await SourcesApi.FetchNowAsync(source.Id);
+            // Acceptance criterion: fetch-now reports its count as an INFO toast.
+            Toasts.ShowInfo(
+                $"Fetched '{source.DisplayName}': {result.NewProcessedMessages} new message(s), {result.Processed} processed.");
+            await LoadAsync();
+        }
+        catch (SourcesApiException ex) when (IsDekRejected(ex))
+        {
+            Relock("Your cached key does not unlock this account's saved sources. "
+                + "Enter your passphrase again to continue.");
+        }
+        catch (SourcesApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (SourcesApiException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _busyRow = null;
+        }
+    }
+
+    /// <summary>Timestamps in the viewer's local time (task scope column list); "—" when never run/scheduled.</summary>
+    private static string FormatTime(DateTimeOffset? value)
+        => value is null ? "—" : value.Value.ToLocalTime().ToString("g");
+
+    internal static string EditButtonId(Guid id) => $"source-edit-{id:N}";
+    internal static string TestButtonId(Guid id) => $"source-test-{id:N}";
+    internal static string FetchButtonId(Guid id) => $"source-fetch-{id:N}";
+    internal static string DeleteButtonId(Guid id) => $"source-delete-{id:N}";
+}

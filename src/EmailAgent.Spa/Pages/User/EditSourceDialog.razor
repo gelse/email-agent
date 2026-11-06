@@ -1,0 +1,427 @@
+@using EmailAgent.Contracts.Schema
+@inject SourcesClient SourcesApi
+@inject ToastService Toasts
+
+@* M2T6: the hand-written add/edit dialog (Q-F4 — no schema-driven
+   generation). Required flags are enumerated from ImapConfigSchema through
+   M2T2's JsonSchemaIntrospector, bounds mirror the same schema, and RFC 7807
+   errors[] from the API are rendered inline next to the field they name. *@
+<div class="modal-backdrop">
+    <div class="modal source-dialog" role="dialog" aria-modal="true"
+         aria-label="@(SourceId is null ? "Add source" : "Edit source")">
+        <h2>@(SourceId is null ? "Add source" : "Edit source")</h2>
+
+        @if (_loading)
+        {
+            <p>Loading…</p>
+        }
+        else
+        {
+            @if (_error is not null)
+            {
+                <div class="error-box" id="source-error" role="alert">@_error</div>
+            }
+
+            @if (_testError is not null)
+            {
+                <div class="error-box" id="source-test-error" role="alert">@_testError</div>
+            }
+
+            <div class="form-field">
+                <label for="source-display-name">Display name</label>
+                <input id="source-display-name" class="form-control" @bind="_displayName" />
+                @FieldError("display_name")
+            </div>
+
+            <div class="form-field">
+                <label for="source-type">Type</label>
+                <input id="source-type" class="form-control" value="imap" readonly />
+                <span class="hint">Only the IMAP plugin ships in M2.</span>
+            </div>
+
+            <div class="form-field">
+                <label for="source-interval">Interval (minutes)</label>
+                <input id="source-interval" class="form-control" type="number" min="1" max="1440"
+                       @bind="_interval" />
+                @FieldError("interval_minutes")
+                <span class="hint" id="source-interval-note">Scheduling is enabled in M5.</span>
+            </div>
+
+            <h3>IMAP configuration</h3>
+
+            <div class="form-field">
+                <label for="source-host">Host</label>
+                <input id="source-host" class="form-control" @bind="_host" />
+                @FieldError("host")
+            </div>
+
+            <div class="form-field">
+                <label for="source-port">Port</label>
+                <input id="source-port" class="form-control" type="number" min="1" max="65535"
+                       @bind="_port" />
+                @FieldError("port")
+            </div>
+
+            <div class="form-field form-check">
+                <label for="source-use-ssl">Use SSL</label>
+                <input id="source-use-ssl" type="checkbox" @bind="_useSsl" />
+                @FieldError("use_ssl")
+            </div>
+
+            <div class="form-field">
+                <label for="source-username">Username</label>
+                <input id="source-username" class="form-control" @bind="_username" />
+                @FieldError("username")
+            </div>
+
+            <div class="form-field">
+                <label for="source-password">Password</label>
+                <input id="source-password" type="password" class="form-control"
+                       @bind="_password" autocomplete="new-password" />
+                @FieldError("password")
+                <span class="hint" id="source-password-note">
+                    @(SourceId is null
+                        ? "Required — the source cannot connect without it."
+                        : "Leave blank to keep the stored password.")
+                </span>
+            </div>
+
+            <div class="form-field">
+                <label for="source-mailbox">Mailbox</label>
+                <input id="source-mailbox" class="form-control" @bind="_mailbox" />
+                @FieldError("mailbox")
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="btn-secondary" id="source-test"
+                        disabled="@(_busy || _gone)" @onclick="TestConnectionAsync">
+                    @(_busy == Testing ? "Testing…" : "Test connection")
+                </button>
+                <button type="button" class="btn-primary" id="source-save"
+                        disabled="@(_busy || _gone)" @onclick="SaveAsync">
+                    @(_busy && !Testing ? "Saving…" : "Save")
+                </button>
+                <button type="button" class="btn-secondary" id="source-cancel"
+                        disabled="@_busy" @onclick="OnCancel">Cancel</button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Null for "Add source"; the id of the row being edited otherwise.</summary>
+    [Parameter]
+    public Guid? SourceId { get; set; }
+
+    [Parameter, EditorRequired]
+    public EventCallback OnCancel { get; set; }
+
+    /// <summary>Raised with the saved projection so the parent can refresh its list.</summary>
+    [Parameter, EditorRequired]
+    public EventCallback<SourceDto> OnSaved { get; set; }
+
+    /// <summary>Wire names the API can blame, so stray errors[] entries land in the banner instead.</summary>
+    private static readonly HashSet<string> KnownFieldNames = new(StringComparer.Ordinal)
+    {
+        "display_name", "interval_minutes", "type_id", "config",
+        "host", "port", "use_ssl", "username", "password", "mailbox",
+    };
+
+    private string _displayName = string.Empty;
+    private string _interval = "5";
+    private string _host = string.Empty;
+    private string _port = "993";
+    private bool _useSsl = true;
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string _mailbox = "INBOX";
+
+    private readonly Dictionary<string, string> _fieldErrors = new(StringComparer.Ordinal);
+    private string? _error;
+    private string? _testError;
+    private bool _loading;
+    private bool _busy;
+    private bool _testing;
+
+    /// <summary>
+    /// M2T6 review fix: the pre-filled source vanished (deleted in another
+    /// tab). The form is shown but dead — Save would PATCH an id that no
+    /// longer exists, and Test would dial a config nobody owns.
+    /// </summary>
+    private bool _gone;
+
+    private bool Testing
+    {
+        get => _testing;
+        set => _testing = value;
+    }
+
+    /// <summary>
+    /// Edit mode only: GET /v1/user/sources/{id} pre-fills every field. The
+    /// projection carries no password, so that field starts blank (task Risks
+    /// "Password field UX on edit").
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        if (SourceId is not { } id)
+        {
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            var source = await SourcesApi.GetAsync(id);
+            _displayName = source.DisplayName;
+            _interval = source.IntervalMinutes.ToString();
+            _host = source.Config.Host ?? string.Empty;
+            _port = (source.Config.Port ?? 993).ToString();
+            _useSsl = source.Config.UseSsl ?? true;
+            _username = source.Config.Username ?? string.Empty;
+            _mailbox = source.Config.Mailbox ?? "INBOX";
+            _password = string.Empty;
+        }
+        catch (SourcesApiException ex) when (ex.Status == HttpStatusCode.NotFound)
+        {
+            _gone = true;
+            _error = "This source no longer exists — it may have been deleted in another tab. "
+                + "Close this dialog to see the current list.";
+        }
+        catch (SourcesApiException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>
+    /// "Test connection" with the current form state (task scope bullet 3):
+    /// <c>{ ok: false }</c> renders the API's own error string in an inline
+    /// red banner, <c>{ ok: true }</c> raises a success toast, and a 400 the
+    /// API can prove (schema violation) lands in the same banner.
+    /// </summary>
+    private async Task TestConnectionAsync()
+    {
+        _error = null;
+        _testError = null;
+
+        // The candidate config must be complete to be worth dialling: the
+        // schema requires the password even when an edit keeps the stored one.
+        if (!Validate(requirePassword: true, forTest: true))
+        {
+            return;
+        }
+
+        _busy = true;
+        _testing = true;
+        try
+        {
+            var outcome = await SourcesApi.TestConnectionAsync(new TestConnectionRequest
+            {
+                TypeId = "imap",
+                Config = BuildConfig(),
+            });
+
+            if (outcome.Ok)
+            {
+                Toasts.ShowSuccess($"Connection to '{_displayName.Trim()}' succeeded.");
+                _testError = null;
+            }
+            else
+            {
+                _testError = outcome.Error ?? "The connection test failed.";
+            }
+        }
+        catch (SourcesApiException ex)
+        {
+            ApplyProblem(ex);
+        }
+        catch (HttpRequestException)
+        {
+            _testError = "Could not reach the API.";
+        }
+        finally
+        {
+            _busy = false;
+            _testing = false;
+        }
+    }
+
+    /// <summary>
+    /// Save: POST on create, PATCH on edit (password member only when the
+    /// field is non-empty). Client-side checks run first — no network call
+    /// for a form the schema already rejects — then RFC 7807 <c>errors[]</c>
+    /// are rendered inline per field. Success closes the dialog and lets the
+    /// parent refresh.
+    /// </summary>
+    private async Task SaveAsync()
+    {
+        _error = null;
+        _testError = null;
+
+        // Create needs every required member including the password; edit
+        // tolerates a blank one (the server keeps the stored credential).
+        if (!Validate(requirePassword: SourceId is null, forTest: false))
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            if (SourceId is not { } id)
+            {
+                var created = await SourcesApi.CreateAsync(new CreateSourceRequest
+                {
+                    TypeId = "imap",
+                    DisplayName = _displayName.Trim(),
+                    IntervalMinutes = ParseOr(_interval, 5),
+                    Config = BuildConfig(),
+                });
+                await OnSaved.InvokeAsync(created);
+            }
+            else
+            {
+                var updated = await SourcesApi.UpdateAsync(id, new UpdateSourceRequest
+                {
+                    DisplayName = _displayName.Trim(),
+                    IntervalMinutes = ParseOr(_interval, 5),
+                    Config = BuildConfig(),
+                });
+                await OnSaved.InvokeAsync(updated);
+            }
+        }
+        catch (SourcesApiException ex)
+        {
+            ApplyProblem(ex);
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>
+    /// Client-side gate before any request (acceptance criterion): the
+    /// required member list is read from <c>ImapConfigSchema</c> through
+    /// <c>JsonSchemaIntrospector.ListFields</c> rather than re-typed, plus
+    /// the display-name rule and the schema's numeric bounds.
+    /// </summary>
+    private bool Validate(bool requirePassword, bool forTest)
+    {
+        _fieldErrors.Clear();
+
+        if (string.IsNullOrWhiteSpace(_displayName))
+        {
+            _fieldErrors["display_name"] = "Display name is required.";
+        }
+
+        if (!TryParseInt(_interval, out var interval)
+            || interval < 1 || interval > 1440)
+        {
+            _fieldErrors["interval_minutes"] = "Interval must be between 1 and 1440.";
+        }
+
+        if (!TryParseInt(_port, out var port) || port < 1 || port > 65535)
+        {
+            _fieldErrors["port"] = "Port must be between 1 and 65535.";
+        }
+
+        foreach (var field in JsonSchemaIntrospector.ListFields(ImapConfigSchema.Build()))
+        {
+            if (!field.Required)
+            {
+                continue;
+            }
+
+            var supplied = field.Name switch
+            {
+                "host" => !string.IsNullOrWhiteSpace(_host),
+                "username" => !string.IsNullOrWhiteSpace(_username),
+                "password" => !string.IsNullOrWhiteSpace(_password),
+                "mailbox" => !string.IsNullOrWhiteSpace(_mailbox),
+                "port" => TryParseInt(_port, out _),
+                "use_ssl" => true, // the checkbox always carries a value
+                _ => true,
+            };
+
+            // Edit keeps the stored password when the field is blank; a
+            // connection test still needs a candidate password to dial with.
+            var keepStoredPassword = field.Name == "password"
+                && SourceId is not null
+                && !forTest;
+
+            if (!requirePassword && field.Name == "password")
+            {
+                continue;
+            }
+
+            if (!supplied && !keepStoredPassword)
+            {
+                _fieldErrors[field.Name] = Label(field.Name) + " is required.";
+            }
+        }
+
+        return _fieldErrors.Count == 0;
+    }
+
+    /// <summary>Attaches a 4xx's <c>errors[]</c> to the fields they name; stray names fall back to the banner.</summary>
+    private void ApplyProblem(SourcesApiException exception)
+    {
+        var mapped = 0;
+        foreach (var entry in exception.FieldErrors)
+        {
+            if (entry.Name is not null && KnownFieldNames.Contains(entry.Name))
+            {
+                _fieldErrors[entry.Name] = entry.Reason ?? string.Empty;
+                mapped++;
+            }
+        }
+
+        if (mapped == 0)
+        {
+            _error = exception.Message;
+        }
+    }
+
+    private Dictionary<string, object?> BuildConfig() => new(StringComparer.Ordinal)
+    {
+        ["host"] = _host.Trim(),
+        ["port"] = ParseOr(_port, 993),
+        ["use_ssl"] = _useSsl,
+        ["username"] = _username.Trim(),
+        ["password"] = _password ?? string.Empty,
+        ["mailbox"] = string.IsNullOrWhiteSpace(_mailbox) ? "INBOX" : _mailbox.Trim(),
+    };
+
+    private MarkupString FieldError(string name)
+        => _fieldErrors.TryGetValue(name, out var reason)
+            ? new MarkupString($"<div class=\"validation-message\" id=\"error-{name}\">{System.Net.WebUtility.HtmlEncode(reason)}</div>")
+            : default;
+
+    private static string Label(string name) => name switch
+    {
+        "display_name" => "Display name",
+        "interval_minutes" => "Interval",
+        "type_id" => "Type",
+        "use_ssl" => "Use SSL",
+        _ => char.ToUpperInvariant(name[0]) + name[1..],
+    };
+
+    private static bool TryParseInt(string value, out int parsed)
+        => int.TryParse(value?.Trim(), out parsed);
+
+    private static int ParseOr(string? value, int fallback)
+        => int.TryParse(value?.Trim(), out var parsed) ? parsed : fallback;
+}
