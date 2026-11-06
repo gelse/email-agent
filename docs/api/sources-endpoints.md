@@ -72,7 +72,7 @@ and `reason` the human-readable constraint (e.g. `must be between 1 and 65535`).
 | `/errors/forbidden` | 403 | Wrong role, or a disabled account. |
 | `/errors/validation` | 400 | Request shape, `X-User-Dek`, body JSON, cursor, `limit`, or `status` (`errors[].name` = offending member: `config`, `interval_minutes`, `type_id`, `x-user-dek`, `cursor`, `limit`, `status`, `passphrase`, `body`). |
 | `/errors/config-validation` | 400 | Config fails the plugin's `ConfigSchema` — raised **before any socket is opened** (e.g. `port: 99999`). |
-| `/errors/plugin-not-registered` | 400 | `type_id` not offered by any registered plugin. |
+| `/errors/plugin-not-registered` | 400 | `type_id` not offered by any registered plugin. **M2T7 refusal-wins:** a drop-in candidate refused at load time also removes the `plugin_id` it claims from the registry for that cycle (`IPluginRegistry.UnregisterMessageSource`), so a tampered file claiming `imap` takes even the build-output `imap` offline — `test-connection` then answers this error instead of reaching a plugin whose `plugin_rejected` row says it was refused. Remove the refused file and reload to restore it. |
 | `/errors/dek-invalid` | 400 | `X-User-Dek` does not unwrap this source's config blob. |
 | `/errors/credential-mismatch` | 401 | `POST /v1/user/account/unwrap-dek` with a wrong passphrase — detail "The passphrase is not valid."; audited as `dek_unwrap_failed`. Distinct from `/errors/unauthorized`, which is a token problem. |
 | `/errors/source-not-found` | 404 | Missing id **or another user's id** (indistinguishable by design). |

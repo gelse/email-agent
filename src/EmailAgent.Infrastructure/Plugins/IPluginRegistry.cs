@@ -27,6 +27,17 @@ public interface IPluginRegistry
     /// <summary>Returns the message source registered under <paramref name="pluginId"/>, or <c>null</c>.</summary>
     IMessageSource? GetMessageSource(string pluginId);
 
+    /// <summary>
+    /// Removes the entry under <paramref name="pluginId"/> if present (no-op
+    /// when absent). M2T7 refusal-wins: the loader calls this after a reload
+    /// scan for every plugin_id a refused drop-in candidate claimed, so a
+    /// same-id build-output (DEFAULT) plugin never survives the cycle while
+    /// its drop-in counterpart failed a gate — <c>test-connection</c> then
+    /// resolves to <c>plugin-not-registered</c> instead of a plugin the audit
+    /// trail says was refused.
+    /// </summary>
+    void UnregisterMessageSource(string pluginId);
+
     /// <summary>All registered plugin ids (snapshot; unordered).</summary>
     IReadOnlyCollection<string> MessageSourceIds { get; }
 

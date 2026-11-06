@@ -84,6 +84,20 @@ namespace EmailAgent.Infrastructure.Plugins;
 /// name AND SHA-256 match <see cref="DefaultTrustAnchor"/>, otherwise it is
 /// skipped at debug level without executing or auditing (round 2, WARNING).
 /// </para>
+/// <para>
+/// Refusal-wins (M2T7 reconciliation of the M2T3 semantics): a drop-in
+/// candidate refused by any gate returns the plugin_id its manifest claims,
+/// and after the scan those ids are unregistered from
+/// <see cref="IPluginRegistry"/> — the registry never keeps a same-id entry
+/// (DEFAULT or earlier candidate) whose drop-in counterpart was refused in
+/// the same cycle. This is what lets the M2 smoke's tampered drop-in claiming
+/// <c>imap</c> take the good build-output <c>imap</c> offline until the file
+/// is removed and a reload runs (the audit trail says refused; the registry
+/// agrees). A sibling-dependency skip is not a refusal and never poisons an
+/// id, and DEFAULT-path (<see cref="LoadDefaultsAsync"/>) refusals do not
+/// poison either — a valid drop-in must still be able to rescue a broken
+/// build-output plugin.
+/// </para>
 /// </remarks>
 public sealed class PluginLoader : IHostedService
 {
@@ -409,14 +423,58 @@ public sealed class PluginLoader : IHostedService
             return;
         }
 
+        var refusedPluginIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await ProcessDropInAsync(directory, file, cancellationToken).ConfigureAwait(false);
+            var refusedPluginId = await ProcessDropInAsync(directory, file, cancellationToken).ConfigureAwait(false);
+            if (refusedPluginId is not null)
+            {
+                refusedPluginIds.Add(refusedPluginId);
+            }
+        }
+
+        // Refusal-wins (M2T7, recorded in M2T3/M2T7): a refused drop-in may
+        // claim a plugin_id the DEFAULT pass (or an earlier candidate)
+        // already registered — the M2 smoke's flow 3 plants exactly that: a
+        // tampered EmailAgent.Connectors.Imap.plugin.json claiming
+        // plugin_id "imap" beside the good build-output DEFAULT. Unregister
+        // AFTER the whole scan so any same-id entry, whenever it registered
+        // this cycle, ends the cycle gone — one refusal of an id poisons
+        // that id (fail-closed; drop-folder write is operator-only).
+        foreach (var pluginId in refusedPluginIds)
+        {
+            // Presence-checked so the WARNING names a state change that
+            // actually happened (review INFO): a refused claim of an id that
+            // never registered in this cycle must not announce an
+            // "unregistered" that did not occur — it stays at debug level.
+            var wasRegistered = _registry.GetMessageSource(pluginId) is not null;
+            _registry.UnregisterMessageSource(pluginId);
+            if (wasRegistered)
+            {
+                _logger.LogWarning(
+                    "Plugin {PluginId} unregistered: its drop-in candidate was refused during this reload cycle "
+                    + "(refusal-wins — remove the refused file and reload to restore it)",
+                    pluginId);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Refused drop-in claimed plugin id {PluginId}, which was not registered at the end of this scan "
+                    + "(nothing to unregister)",
+                    pluginId);
+            }
         }
     }
 
-    private async Task ProcessDropInAsync(string directory, string file, CancellationToken cancellationToken)
+    /// <summary>
+    /// One drop-in candidate through every gate. Returns the plugin_id the
+    /// candidate claimed when it was REFUSED (null when accepted, skipped as
+    /// a sibling dependency, or the claim was never known) —
+    /// <see cref="ScanDropInsAsync"/> unregisters those ids afterwards
+    /// (refusal-wins).
+    /// </summary>
+    private async Task<string?> ProcessDropInAsync(string directory, string file, CancellationToken cancellationToken)
     {
         var fileName = Path.GetFileName(file);
         var manifestFileName = Path.GetFileNameWithoutExtension(fileName) + ManifestSuffix;
@@ -426,6 +484,13 @@ public sealed class PluginLoader : IHostedService
         // is dropped again on rejection; on success ownership moves to
         // _loaded (context set to null).
         PluginLoadContext? context = null;
+
+        // Refusal-wins bookkeeping: the plugin_id this candidate claims (set
+        // as soon as a manifest states one, so even a later-field validation
+        // failure poisons the claimed id) and the id this candidate's refusal
+        // must hand back to the scan.
+        string? claimedPluginId = null;
+        string? refusedPluginId = null;
 
         try
         {
@@ -469,7 +534,7 @@ public sealed class PluginLoader : IHostedService
                         + "(treated as a sibling dependency, not a plugin candidate)",
                         fileName,
                         manifestFileName);
-                    return;
+                    return null; // not a candidate, therefore NOT a refusal — never poisons an id
                 }
 
                 if (!anchorEntry.Value.Sha256.AsSpan().SequenceEqual(sha256))
@@ -488,7 +553,7 @@ public sealed class PluginLoader : IHostedService
                             cancellationToken,
                             pluginId: anchorEntry.Value.PluginId)
                         .ConfigureAwait(false);
-                    return;
+                    return anchorEntry.Value.PluginId; // refused → poison the DEFAULT id it claims by file name
                 }
 
                 context = new PluginLoadContext(directory);
@@ -497,6 +562,11 @@ public sealed class PluginLoader : IHostedService
                     ?? throw new PluginManifestException(
                         $"no {manifestFileName} companion next to {fileName} and the assembly embeds no {ManifestSuffix} resource");
             }
+
+            // Claim the identity as soon as the manifest states one: a
+            // refusal must poison this id even when a later validation of
+            // the same manifest fails (refusal-wins, M2T7).
+            claimedPluginId = string.IsNullOrWhiteSpace(manifest.PluginId) ? null : manifest.PluginId;
 
             if (string.IsNullOrWhiteSpace(manifest.PluginId) || string.IsNullOrWhiteSpace(manifest.Version))
             {
@@ -598,20 +668,27 @@ public sealed class PluginLoader : IHostedService
             {
                 context = null; // owned by _loaded now; swap/stop unload it later
             }
+            else
+            {
+                refusedPluginId = claimedPluginId; // RegisterAsync already audited the refusal
+            }
         }
         catch (PluginSignatureException ex)
         {
+            refusedPluginId = claimedPluginId;
             await RejectAsync(
                     targetId: fileName,
                     targetType: "plugin",
                     reason: ex.Reason,
                     detail: "signature",
                     message: ex.Message,
-                    cancellationToken)
+                    cancellationToken,
+                    pluginId: claimedPluginId)
                 .ConfigureAwait(false);
         }
         catch (PluginApprovalException ex)
         {
+            refusedPluginId = ex.PluginId;
             await RejectAsync(
                     targetId: fileName,
                     targetType: "plugin",
@@ -624,6 +701,7 @@ public sealed class PluginLoader : IHostedService
         }
         catch (PluginCapabilityException ex)
         {
+            refusedPluginId = ex.PluginId;
             await RejectAsync(
                     targetId: fileName,
                     targetType: "plugin",
@@ -636,28 +714,33 @@ public sealed class PluginLoader : IHostedService
         }
         catch (PluginManifestException ex)
         {
+            refusedPluginId = claimedPluginId;
             await RejectAsync(
                     targetId: fileName,
                     targetType: "plugin",
                     reason: "manifest_invalid",
                     detail: "manifest",
                     message: ex.Message,
-                    cancellationToken)
+                    cancellationToken,
+                    pluginId: claimedPluginId)
                 .ConfigureAwait(false);
         }
         catch (JsonException ex)
         {
+            refusedPluginId = claimedPluginId;
             await RejectAsync(
                     targetId: fileName,
                     targetType: "plugin",
                     reason: "manifest_invalid",
                     detail: "manifest_malformed",
                     message: ex.Message,
-                    cancellationToken)
+                    cancellationToken,
+                    pluginId: claimedPluginId)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
+            refusedPluginId = claimedPluginId;
             _logger.LogError(ex, "Failed to load plugin candidate {File}", fileName);
             await RejectAsync(
                     targetId: fileName,
@@ -665,7 +748,8 @@ public sealed class PluginLoader : IHostedService
                     reason: "load_failed",
                     detail: "exception",
                     message: ex.Message,
-                    cancellationToken)
+                    cancellationToken,
+                    pluginId: claimedPluginId)
                 .ConfigureAwait(false);
         }
         finally
@@ -675,6 +759,8 @@ public sealed class PluginLoader : IHostedService
                 context.Unload();
             }
         }
+
+        return refusedPluginId;
     }
 
     /// <summary>

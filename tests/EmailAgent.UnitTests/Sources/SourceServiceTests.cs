@@ -127,6 +127,8 @@ public class SourceServiceTests
         public void RegisterMessageSource(string pluginId, IMessageSource source)
             => _sources[pluginId] = source;
 
+        public void UnregisterMessageSource(string pluginId) => _sources.Remove(pluginId);
+
         public IMessageSource? GetMessageSource(string pluginId)
             => _sources.GetValueOrDefault(pluginId);
 

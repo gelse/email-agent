@@ -25,6 +25,32 @@ services:
     secrets:
       - postgres_password
 
+  # M2T7 / §17: the IMAP server the M2 smoke (scripts/smoke-m2.sh) and the
+  # M2E2E xUnit suite exercise. STRICT authentication: the image's default
+  # GREENMAIL_OPTS carries -Dgreenmail.auth.disabled, and that switch is
+  # presence-only — any value (even "false") disables auth — so the whole
+  # variable is overridden with the setup preset MINUS that flag, the same
+  # recipe as tests/EmailAgent.IntegrationTests/Fixtures/GreenMailFixture.cs
+  # (M2T4). Wrong-password IMAP logins then genuinely fail, which is what
+  # smoke flow 2 asserts.
+  greenmail:
+    image: greenmail/standalone:2.0.1
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.all
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.tls.keystore.file=/home/greenmail/greenmail.p12
+        -Dgreenmail.tls.keystore.password=changeit
+    # Loopback-only publish for HOST-side tooling: scripts/seed-mailbox.sh
+    # injects the three smoke messages over SMTP and drives readiness/user
+    # provisioning/purge over the REST API. The api container does NOT use
+    # these mappings — it reaches the same services by service name on the
+    # compose network (greenmail:3143 for IMAP). The REST port maps to
+    # 18080 by default because 8080 is frequently taken on dev hosts.
+    ports:
+      - "127.0.0.1:${GREENMAIL_SMTP_PORT:-3025}:3025"
+      - "127.0.0.1:${GREENMAIL_REST_PORT:-18080}:8080"
+
   api:
     build:
       context: ..

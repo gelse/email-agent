@@ -21,6 +21,12 @@ public sealed class PluginRegistry : IPluginRegistry
         _messageSources[pluginId] = source;
     }
 
+    public void UnregisterMessageSource(string pluginId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        _messageSources.TryRemove(pluginId, out _);
+    }
+
     public IMessageSource? GetMessageSource(string pluginId) =>
         pluginId is null ? null : _messageSources.GetValueOrDefault(pluginId);
 

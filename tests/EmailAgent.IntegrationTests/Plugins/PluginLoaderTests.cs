@@ -565,6 +565,54 @@ public class PluginLoaderTests
     }
 
     // -----------------------------------------------------------------------
+    // M2T7 reconciliation (recorded as an M2T3 deviation — refusal-wins): a
+    // refused drop-in may CLAIM the plugin_id of a good DEFAULT plugin; the
+    // audit then says "refused" while the registry still resolves the id, so
+    // test-connection would keep succeeding against the plugin the operator
+    // just tampered with (smoke flow 3 of M2T7). The loader must unregister
+    // the claimed id after the scan, and the refusal row must carry the
+    // plugin_id that keys that unregister.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Loader_Unregisters_Default_Plugin_Whose_Id_A_Refused_DropIn_Claims()
+    {
+        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var signingKey = RandomSigningKey();
+        var directory = CreatePluginsDirectory();
+        var bytes = ImapAssemblyBytes();
+
+        // Tampered bytes paired with a companion manifest claiming the DEFAULT
+        // plugin_id "imap" — exactly the M2 smoke flow 3 artifact: the
+        // signature gate refuses the candidate at the startup scan.
+        var tampered = (byte[])bytes.Clone();
+        tampered[^1] ^= 0xFF;
+        PlantPlugin(directory, "imap", "9.9.9", tampered, signingKey, bytesToSign: bytes);
+
+        await using var factory = ApiTestFactory.Create(connectionString, directory, signingKey);
+        var client = factory.CreateClient(); // host start — the startup scan runs the refusal
+
+        var registry = factory.Services.GetRequiredService<IPluginRegistry>();
+        registry.GetMessageSource("imap").Should().BeNull(
+            "refusal-wins: the refused drop-in claimed plugin_id imap, so the good build-output imap must not survive the scan");
+        registry.MessageSourceIds.Should().BeEquivalentTo(
+            new[] { "openai-compatible", "telegram-send" },
+            "only the two DEFAULT plugins whose ids were not poisoned by a refusal remain registered");
+
+        // The signature_mismatch row must carry the claimed plugin_id — that
+        // is the value the refusal-wins unregister keys on, and what lets an
+        // operator correlate the refusal with the id that went offline.
+        var rejection = await FindAuditMetadataAsync(
+            factory, AuditActions.PluginRejected,
+            reason: PluginSignatureException.SignatureMismatch,
+            assemblyFile: CompanionDll,
+            pluginId: "imap");
+        rejection.Should().NotBeNull(
+            "the signature_mismatch audit row must carry plugin_id=imap (threaded from the companion manifest)");
+        ParseMetadata(rejection!).GetProperty("detail").GetString().Should().Be("signature");
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers.
     // -----------------------------------------------------------------------
 
