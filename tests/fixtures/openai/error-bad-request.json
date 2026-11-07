@@ -1,0 +1,7 @@
+{
+  "api_key": "sk-test-redacted",
+  "error": {
+    "message": "invalid api key",
+    "type": "invalid_request_error"
+  }
+}

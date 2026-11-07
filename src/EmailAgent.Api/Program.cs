@@ -1,13 +1,17 @@
 using EmailAgent.Api.Audit;
 using EmailAgent.Api.Auth;
+using EmailAgent.Api.Config;
 using EmailAgent.Api.Configuration;
 using EmailAgent.Api.Endpoints;
 using EmailAgent.Api.Errors;
 using EmailAgent.Api.HealthChecks;
+using EmailAgent.Api.Models;
 using EmailAgent.Api.Options;
 using EmailAgent.Api.Sources;
+using EmailAgent.Contracts.AgentEngines;
 using EmailAgent.Core.Options;
 using EmailAgent.Infrastructure;
+using EmailAgent.Infrastructure.Agents;
 using EmailAgent.Infrastructure.Entities;
 using EmailAgent.Infrastructure.Plugins;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -147,6 +151,10 @@ builder.Services.AddHostedService<AuditChainStartupVerifier>();
 // - Registry + gate services are singletons; PluginLoader is registered both
 //   as itself (Program's SIGHUP handler resolves it) and as the hosted
 //   service that runs one load cycle at startup (task step 8).
+// - M3T1: the engine plugins take an HttpClient via constructor, so
+//   IHttpClientFactory is registered (AddHttpClient) plus a transient
+//   HttpClient that backs onto PluginLoader.EngineHttpClientName — the loader
+//   resolves the constructor through ActivatorUtilities.
 builder.Services.AddOptions<PluginOptions>()
     .Bind(builder.Configuration.GetSection(PluginOptions.SectionName))
     .Validate(
@@ -161,12 +169,84 @@ builder.Services.AddSingleton<DefaultTrustAnchor>();
 builder.Services.AddSingleton<PluginLoader>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PluginLoader>());
 
+// M3T1: HTTP transport for engine plugins. The loader instantiates the
+// manifest-declared entry type through ActivatorUtilities, so any
+// constructor-injected HttpClient resolves here — an IHttpClientFactory
+// client (pooled handlers, one logical name for every plugin engine call).
+// The named client carries a generous but FINITE timeout (30 min) bounding
+// connect/send/response-HEADERS — note that HttpClient.Timeout stops at the
+// headers under ResponseHeadersRead (dotnet/runtime#54674). The BODY phase is
+// bounded by the engine's own per-call deadline (EngineCallOptions.Timeout or
+// its 30-minute default), and any timeout in either phase is translated by
+// the engine into EngineCallException(408) — never an
+// OperationCanceledException, which is reserved for caller cancellation.
+builder.Services.AddHttpClient();
+builder.Services.AddHttpClient(PluginLoader.EngineHttpClientName)
+    .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromMinutes(30));
+builder.Services.AddTransient(sp =>
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient(PluginLoader.EngineHttpClientName));
+
 // M2T5 (§5 / §13.3 / SQ-7): the /v1/user/sources service pair. Scoped, not
 // singleton, so SourceService, EncryptedSourceConfigStore and AuditLogger all
 // resolve the SAME request DbContext — which is what lets source row, config
 // blob and audit row commit in one transaction.
 builder.Services.AddScoped<EncryptedSourceConfigStore>();
 builder.Services.AddScoped<SourceService>();
+
+// M3T2 (§11 / SQ-M3-3 / Q-L4): the tool-calling capabilities probe.
+// - ModelOptions binds the section "Model" (env MODEL__ProbeReprobeWindow,
+//   default 01:00:00) — deliberately its own section, never Agent (task step 2).
+//   ValidateDataAnnotations + ValidateOnStart fail fast on a malformed window.
+// - TimeProvider.System is the clock seam (cache-window tests substitute their own).
+// - The Func<IAgentEngine> factory resolves the openai-compatible engine from
+//   IPluginRegistry PER PROBE: the engine is a plugin instance, not a
+//   hand-rolled singleton, and the delegate is the unit-test seam (task step 7).
+// - IModelProbeService is SCOPED, not the task snippet's Singleton (deviation
+//   D1): a singleton would capture the scoped EmailAgentDbContext/IAuditLogger
+//   and fail ValidateScopes in Development — the same reason M2T5 registers
+//   SourceService scoped, and it shares M3T3's request DbContext.
+builder.Services.AddOptions<ModelOptions>()
+    .Bind(builder.Configuration.GetSection(ModelOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+builder.Services.AddSingleton<Func<IAgentEngine>>(sp =>
+{
+    var registry = sp.GetRequiredService<IPluginRegistry>();
+    return () => registry.GetAgentEngine(ModelProbeService.OpenAiCompatibleEngineTypeId)
+        ?? throw new InvalidOperationException(
+            $"Agent engine '{ModelProbeService.OpenAiCompatibleEngineTypeId}' is not loaded — the plugin "
+            + "loader must have completed a load cycle before a model probe can run (M3T2).");
+});
+builder.Services.AddScoped<IModelProbeService, ModelProbeService>();
+
+// M3T3 (§6/§7 / SQ-M3-11 / Q-E7): the /v1/admin/models service pair.
+// Scoped, not the task snippet's Singleton (deviation, as M3T2/M2T5): a
+// singleton would capture the scoped EmailAgentDbContext/IAuditLogger and fail
+// ValidateScopes — sharing the request context is exactly what lets catalog
+// row, system-keyed api-key blob and audit row commit in one transaction.
+builder.Services.AddScoped<EncryptedModelApiKeyStore>();
+builder.Services.AddScoped<ModelService>();
+
+// M3T7 (SQ-M3-6 / SQ-M3-12): the read-only GET /v1/user/models service. It
+// shares the request DbContext (scoped, same rationale as M3T3 above) and
+// owns the §11 allow-list filter — enabled = true AND
+// tool_calling_probe_result = Pass — so no client can widen it.
+builder.Services.AddScoped<UserModelService>();
+
+// M3T6 (§13.3 / SQ-M3-4 / SQ-M3-14 / SQ-M3-15): the admin test-completion
+// tool. Scoped for the same reason as M3T2/M3T3 — the request DbContext and
+// audit sink are shared with M3T3's catalog rows; the ENGINE resolves from
+// IPluginRegistry per call keyed by model_catalog.provider, so a provider
+// with no registered plugin fails with a clear 500 (SQ-M3-14) instead of
+// binding to the wrong plugin.
+builder.Services.AddScoped<TestCompletionService>();
+
+// M3T4 (§11 / SQ-M3-17): the cost-derivation helper — provider cost
+// (x-litellm-cost header > usage.cost) > price-derived > NULL. Stateless and
+// pure (no I/O), so the M2T3/M2T5 singleton pattern applies; M3T6's
+// test-completion endpoint and M5's per-message cost write both resolve it.
+builder.Services.AddSingleton<ICostDerivationService, CostDerivationService>();
 
 builder.Host.UseSerilog((context, services, configuration) =>
     configuration
@@ -315,6 +395,26 @@ app.MapAdminUserEndpoints();
 // Mapped before the catch-all so the literal routes always outrank it.
 app.MapSourcesEndpoints();
 app.MapUserAccountEndpoints();
+
+// M3T7 (SQ-M3-6 / SQ-M3-12): the §13.3 /user/models namespace — the reduced
+// { id, display_name, provider, model_name } allow-list projection,
+// [Authorize(Roles = "User, Admin")], ?limit= per §13.13 (default 25, max
+// 100), no cursor in M3. Mapped before the catch-all so the literal route
+// always outranks it.
+app.MapUserModelEndpoints();
+
+// M3T3: the §13.3 /admin/models namespace (list/create/get/patch/delete), all
+// [Authorize(Roles = "Admin")], cursor pagination per §13.13, probe-gated
+// writes (SQ-M3-11). Mapped before the catch-all so the literal routes always
+// outrank it.
+app.MapAdminModelEndpoints();
+
+// M3T6: POST /v1/admin/models/{id}/test-completion — Admin-only manual
+// exerciser (SQ-M3-16, additive §13.7 route): one non-streaming completion
+// through the M2T1 IAgentEngine seam, RFC 7807 errors, the standard
+// §13.14 envelope from the pipeline. Mapped before the catch-all so the
+// literal route outranks it.
+app.MapAdminTestCompletionEndpoints();
 
 // §13.12 AC: unmatched routes answer with an RFC 7807 404 instead of an
 // empty-bodied framework response. A `{**path}` catch-all (every method) is

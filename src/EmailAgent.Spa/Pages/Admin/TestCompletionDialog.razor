@@ -1,0 +1,304 @@
+@namespace EmailAgent.Spa.Pages.Admin
+@using System.Globalization
+@using System.Text.Json
+@using System.Text.Json.Nodes
+@inject ModelsClient ModelsApi
+@inject NavigationManager Nav
+
+@* M3T5: the test-completion dialog (task scope bullet 3) consuming M3T6's
+   POST /v1/admin/models/{id}/test-completion through ModelsClient. The form
+   is hand-written (Q-F4): optional system prompt, required user prompt, and
+   a dynamic tools list whose `parameters` JSON is parsed and validated in the
+   browser before anything is sent. The response renders inline — never as a
+   toast (task Risks "Toast service") — with cost formatted to six decimals
+   and `—` where the API returned null. *@
+<div class="modal-backdrop" @onclick="OnClose">
+    <div class="modal test-dialog" role="dialog" aria-modal="true"
+         aria-labelledby="test-dialog-title" @onclick:stopPropagation="true">
+        <h2 id="test-dialog-title">Test completion — @ModelName</h2>
+
+        @if (_error is not null)
+        {
+            <div class="error-box" id="test-error" role="alert">@_error</div>
+        }
+
+        <div class="form-field">
+            <label for="test-system-prompt">System prompt</label>
+            <textarea id="test-system-prompt" class="form-control" rows="3"
+                      @bind="_systemPrompt"></textarea>
+        </div>
+
+        <div class="form-field">
+            <label for="test-user-prompt">User prompt</label>
+            <textarea id="test-user-prompt" class="form-control" rows="3"
+                      @bind="_userPrompt"></textarea>
+            @FieldError("user_prompt")
+        </div>
+
+        <h3>Tools</h3>
+        @foreach (var tool in _tools)
+        {
+            <div class="tool-row" id="@($"tool-row-{tool.RowId}")">
+                <div class="form-field">
+                    <label for="@($"tool-name-{tool.RowId}")">Name</label>
+                    <input id="@($"tool-name-{tool.RowId}")" class="form-control"
+                           @bind="tool.Name" />
+                </div>
+                <div class="form-field">
+                    <label for="@($"tool-description-{tool.RowId}")">Description</label>
+                    <input id="@($"tool-description-{tool.RowId}")" class="form-control"
+                           @bind="tool.Description" />
+                </div>
+                <div class="form-field">
+                    <label for="@($"tool-params-{tool.RowId}")">Parameters (JSON)</label>
+                    <textarea id="@($"tool-params-{tool.RowId}")" class="form-control" rows="3"
+                              @bind="tool.Parameters"></textarea>
+                    @ToolError(tool)
+                </div>
+                <button type="button" class="btn-secondary" id="@($"tool-remove-{tool.RowId}")"
+                        @onclick="() => RemoveTool(tool)">Remove</button>
+            </div>
+        }
+
+        <button type="button" class="btn-secondary" id="tool-add" @onclick="AddTool">Add tool</button>
+
+        <div class="modal-actions">
+            <button type="button" class="btn-primary" id="test-run"
+                    disabled="@_busy" @onclick="RunAsync">
+                @(_busy ? "Running…" : "Run")
+            </button>
+            <button type="button" class="btn-secondary" id="test-close"
+                    disabled="@_busy" @onclick="OnClose">Close</button>
+        </div>
+
+        @if (_response is not null)
+        {
+            <div class="test-response" id="test-response">
+                <h3>Response</h3>
+                <div id="test-response-text">@_response.ResponseText</div>
+
+                @if (_response.ToolCalls is { Count: > 0 } calls)
+                {
+                    <ul id="test-tool-calls">
+                        @foreach (var call in calls)
+                        {
+                            <li><strong>@call.Name</strong> <code>@call.Arguments.GetRawText()</code></li>
+                        }
+                    </ul>
+                }
+
+                <p id="test-tokens">
+                    Tokens — prompt: @OrDash(_response.PromptTokens),
+                    completion: @OrDash(_response.CompletionTokens),
+                    total: @_response.TotalTokens
+                </p>
+                <p id="test-cost">Cost (USD): @FormatCost(_response.CostUsd)</p>
+                <p id="test-duration">Duration (ms): @_response.DurationMs</p>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public Guid ModelId { get; set; }
+
+    /// <summary>Shown in the dialog's heading so the admin knows which model is dialled.</summary>
+    [Parameter, EditorRequired]
+    public string ModelName { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public EventCallback OnClose { get; set; }
+
+    /// <summary>One editable tools row — a class so bind mutates it in place.</summary>
+    private sealed class ToolRow
+    {
+        public int RowId { get; init; }
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Parameters { get; set; } = string.Empty;
+        public string? Error { get; set; }
+    }
+
+    private readonly List<ToolRow> _tools = new();
+    private int _nextRowId = 1;
+
+    private string _systemPrompt = string.Empty;
+    private string _userPrompt = string.Empty;
+
+    private readonly Dictionary<string, string> _fieldErrors = new(StringComparer.Ordinal);
+    private string? _error;
+    private bool _busy;
+    private TestCompletionResponse? _response;
+
+    private void AddTool() => _tools.Add(new ToolRow { RowId = _nextRowId++ });
+
+    private void RemoveTool(ToolRow tool) => _tools.Remove(tool);
+
+    /// <summary>
+    /// Run: client-side gate first (a blank user prompt and a malformed
+    /// `parameters` document never reach the API), then the §13.12 call. A 200
+    /// renders the response section; any refusal renders its problem document
+    /// in the red banner with the dialog still open.
+    /// </summary>
+    private async Task RunAsync()
+    {
+        _error = null;
+        _fieldErrors.Clear();
+
+        // A new run invalidates the previous result: without this a refused
+        // second call would render its banner NEXT TO the first call's
+        // response/cost block, i.e. a result the admin could mistake for the
+        // outcome of the prompt they just submitted.
+        _response = null;
+
+        if (string.IsNullOrWhiteSpace(_userPrompt))
+        {
+            _fieldErrors["user_prompt"] = "User prompt is required.";
+        }
+
+        var tools = BuildTools();
+        if (_fieldErrors.Count > 0 || tools is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            _response = await ModelsApi.TestCompletionAsync(ModelId, new TestCompletionRequest
+            {
+                SystemPrompt = string.IsNullOrWhiteSpace(_systemPrompt) ? null : _systemPrompt.Trim(),
+                UserPrompt = _userPrompt.Trim(),
+                Tools = tools is { Count: > 0 } ? tools : null,
+            });
+        }
+        catch (ModelsApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (ModelsApiException ex)
+        {
+            ApplyProblem(ex);
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>
+    /// Compiles the rows: an all-blank row is dropped, every row that carries
+    /// anything must have a name and a JSON-OBJECT parameters document (task
+    /// Risks "Multi-tool row UX").
+    /// </summary>
+    private List<ToolSpec>? BuildTools()
+    {
+        var specs = new List<ToolSpec>();
+        var valid = true;
+        foreach (var tool in _tools)
+        {
+            tool.Error = null;
+            var name = tool.Name.Trim();
+            var description = tool.Description.Trim();
+            var parameters = tool.Parameters.Trim();
+            if (name.Length == 0 && description.Length == 0 && parameters.Length == 0)
+            {
+                continue; // untouched row — not sent
+            }
+
+            if (name.Length == 0)
+            {
+                tool.Error = "Tool name is required.";
+                valid = false;
+                continue;
+            }
+
+            if (parameters.Length == 0)
+            {
+                tool.Error = "Parameters must be a JSON object.";
+                valid = false;
+                continue;
+            }
+
+            JsonNode? node = null;
+            try
+            {
+                node = JsonNode.Parse(parameters);
+            }
+            catch (JsonException)
+            {
+                tool.Error = "Parameters must be valid JSON.";
+            }
+
+            if (node is not JsonObject)
+            {
+                if (tool.Error is null)
+                {
+                    tool.Error = "Parameters must be a JSON object.";
+                }
+
+                valid = false;
+                continue;
+            }
+
+            if (tool.Error is not null)
+            {
+                valid = false;
+                continue;
+            }
+
+            specs.Add(new ToolSpec
+            {
+                Name = name,
+                Description = description.Length == 0 ? null : description,
+                Parameters = node,
+            });
+        }
+
+        return valid ? specs : null;
+    }
+
+    /// <summary>Field errors inline, everything else in the banner (dialog stays open).</summary>
+    private void ApplyProblem(ModelsApiException exception)
+    {
+        var mapped = 0;
+        foreach (var entry in exception.FieldErrors)
+        {
+            if (entry.Name is "user_prompt")
+            {
+                _fieldErrors["user_prompt"] = entry.Reason ?? string.Empty;
+                mapped++;
+            }
+        }
+
+        if (mapped == 0)
+        {
+            _error = exception.FriendlyMessage;
+        }
+    }
+
+    private MarkupString FieldError(string name)
+        => _fieldErrors.TryGetValue(name, out var reason)
+            ? new MarkupString($"<div class=\"validation-message\" id=\"error-{name}\">{System.Net.WebUtility.HtmlEncode(reason)}</div>")
+            : default;
+
+    private MarkupString ToolError(ToolRow tool)
+        => tool.Error is null
+            ? default
+            : new MarkupString(
+                $"<div class=\"validation-message\" id=\"tool-error-{tool.RowId}\">"
+                + $"{System.Net.WebUtility.HtmlEncode(tool.Error)}</div>");
+
+    /// <summary>Token counts as the §13.12 DTO reports them — `—` for a provider that reported none.</summary>
+    private static string OrDash(int? value)
+        => value?.ToString(CultureInfo.InvariantCulture) ?? "—";
+
+    /// <summary>Six decimals in invariant culture; `—` when the API derived no cost (task acceptance).</summary>
+    private static string FormatCost(decimal? cost)
+        => cost?.ToString("0.000000", CultureInfo.InvariantCulture) ?? "—";
+}

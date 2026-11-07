@@ -61,6 +61,11 @@ services:
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     environment:
       Blobs__Path: /data/blobs
+      # M3T7 / M3T2 §ModelOptions: the re-probe window — how long a Pass row
+      # may answer a repeat create/PATCH from cache instead of calling the
+      # provider (SQ-M3-13). Optional per M3T7 scope: unset in .env falls
+      # back to the ModelOptions default 01:00:00.
+      MODEL__ProbeReprobeWindow: ${MODEL__ProbeReprobeWindow:-01:00:00}
     volumes:
       - blobs:/data/blobs
       - ./entrypoint.sh:/entrypoint.sh:ro

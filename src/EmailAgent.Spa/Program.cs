@@ -1,5 +1,6 @@
 using EmailAgent.Spa;
 using EmailAgent.Spa.Auth;
+using EmailAgent.Spa.Models;
 using EmailAgent.Spa.Notifications;
 using EmailAgent.Spa.Sources;
 using Microsoft.AspNetCore.Components.Authorization;
@@ -57,8 +58,15 @@ builder.Services.AddSingleton<RefreshCookieAuthenticator>();
 
 // M2T6: the in-memory toast bus (singleton — one queue for every page, no JS
 // interop) and the typed sources client bound to the "Api" chain above.
+// M3T5: the typed models client over the same chain (bearer from
+// BearerTokenHandler, nothing here repeats the JWT).
 builder.Services.AddSingleton<ToastService>();
 builder.Services.AddScoped(sp => new SourcesClient(sp.GetRequiredService<HttpClient>()));
+builder.Services.AddScoped(sp => new ModelsClient(sp.GetRequiredService<HttpClient>()));
+// M3T7 (SQ-M3-12): the reduced /v1/user/models client the /user/agents/new
+// picker loads from, over the same "Api" chain (bearer from
+// BearerTokenHandler).
+builder.Services.AddScoped(sp => new UserModelsClient(sp.GetRequiredService<HttpClient>()));
 
 var host = builder.Build();
 
