@@ -17,7 +17,8 @@ namespace EmailAgent.UnitTests.Spa;
 /// standing in for the API (no test ever reaches a real service — AGENTS.md
 /// hard constraint 3). M2T6 adds the toast bus and the typed
 /// <see cref="SourcesClient"/> over the same stub, M3T5 the typed
-/// <see cref="ModelsClient"/>, both mirroring Program.cs.
+/// <see cref="ModelsClient"/>, M3T7 the typed <see cref="UserModelsClient"/>,
+/// all mirroring Program.cs.
 /// </summary>
 internal sealed class SpaTestContext : TestContext
 {
@@ -37,6 +38,9 @@ internal sealed class SpaTestContext : TestContext
         Services.AddSingleton<ToastService>();
         Services.AddScoped(sp => new SourcesClient(sp.GetRequiredService<HttpClient>()));
         Services.AddScoped(sp => new ModelsClient(sp.GetRequiredService<HttpClient>()));
+        // M3T7: the /user/agents/new picker's typed client over the same stub
+        // (Program.cs parity — one HttpClient, one transport per test).
+        Services.AddScoped(sp => new UserModelsClient(sp.GetRequiredService<HttpClient>()));
     }
 
     /// <summary>The stub transport every page's injected HttpClient uses.</summary>

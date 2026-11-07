@@ -63,6 +63,10 @@ builder.Services.AddSingleton<RefreshCookieAuthenticator>();
 builder.Services.AddSingleton<ToastService>();
 builder.Services.AddScoped(sp => new SourcesClient(sp.GetRequiredService<HttpClient>()));
 builder.Services.AddScoped(sp => new ModelsClient(sp.GetRequiredService<HttpClient>()));
+// M3T7 (SQ-M3-12): the reduced /v1/user/models client the /user/agents/new
+// picker loads from, over the same "Api" chain (bearer from
+// BearerTokenHandler).
+builder.Services.AddScoped(sp => new UserModelsClient(sp.GetRequiredService<HttpClient>()));
 
 var host = builder.Build();
 

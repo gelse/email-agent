@@ -228,6 +228,12 @@ builder.Services.AddScoped<IModelProbeService, ModelProbeService>();
 builder.Services.AddScoped<EncryptedModelApiKeyStore>();
 builder.Services.AddScoped<ModelService>();
 
+// M3T7 (SQ-M3-6 / SQ-M3-12): the read-only GET /v1/user/models service. It
+// shares the request DbContext (scoped, same rationale as M3T3 above) and
+// owns the §11 allow-list filter — enabled = true AND
+// tool_calling_probe_result = Pass — so no client can widen it.
+builder.Services.AddScoped<UserModelService>();
+
 // M3T6 (§13.3 / SQ-M3-4 / SQ-M3-14 / SQ-M3-15): the admin test-completion
 // tool. Scoped for the same reason as M3T2/M3T3 — the request DbContext and
 // audit sink are shared with M3T3's catalog rows; the ENGINE resolves from
@@ -389,6 +395,13 @@ app.MapAdminUserEndpoints();
 // Mapped before the catch-all so the literal routes always outrank it.
 app.MapSourcesEndpoints();
 app.MapUserAccountEndpoints();
+
+// M3T7 (SQ-M3-6 / SQ-M3-12): the §13.3 /user/models namespace — the reduced
+// { id, display_name, provider, model_name } allow-list projection,
+// [Authorize(Roles = "User, Admin")], ?limit= per §13.13 (default 25, max
+// 100), no cursor in M3. Mapped before the catch-all so the literal route
+// always outranks it.
+app.MapUserModelEndpoints();
 
 // M3T3: the §13.3 /admin/models namespace (list/create/get/patch/delete), all
 // [Authorize(Roles = "Admin")], cursor pagination per §13.13, probe-gated
