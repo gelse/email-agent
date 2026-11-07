@@ -76,4 +76,25 @@ public static class AuditActions
     /// 256-byte response excerpt — never the plaintext <c>api_key</c>.
     /// </summary>
     public const string ModelProbeFailed = "model_probe_failed";
+
+    /// <summary>
+    /// M3T3 (Q-O17): <c>POST /v1/admin/models</c> inserted a
+    /// <c>model_catalog</c> row plus its system-owned <c>model_api_key</c>
+    /// blob (§6/§7). <c>metadata_json</c> carries the catalog fields and the
+    /// probe outcome — never the api_key (plaintext or wrapped).
+    /// </summary>
+    public const string CreateModel = "create_model";
+
+    /// <summary>
+    /// M3T3 (Q-O17): <c>PATCH /v1/admin/models/{id}</c>; the
+    /// <c>changed_fields</c> array and the probe outcome ride in
+    /// <c>metadata_json</c> — never the api_key.
+    /// </summary>
+    public const string UpdateModel = "update_model";
+
+    /// <summary>
+    /// M3T3 (Q-O17): <c>DELETE /v1/admin/models/{id}</c> — catalog row plus
+    /// its <c>model_api_key</c> blob in one transaction.
+    /// </summary>
+    public const string DeleteModel = "delete_model";
 }

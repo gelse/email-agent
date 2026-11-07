@@ -219,6 +219,14 @@ builder.Services.AddSingleton<Func<IAgentEngine>>(sp =>
 });
 builder.Services.AddScoped<IModelProbeService, ModelProbeService>();
 
+// M3T3 (§6/§7 / SQ-M3-11 / Q-E7): the /v1/admin/models service pair.
+// Scoped, not the task snippet's Singleton (deviation, as M3T2/M2T5): a
+// singleton would capture the scoped EmailAgentDbContext/IAuditLogger and fail
+// ValidateScopes — sharing the request context is exactly what lets catalog
+// row, system-keyed api-key blob and audit row commit in one transaction.
+builder.Services.AddScoped<EncryptedModelApiKeyStore>();
+builder.Services.AddScoped<ModelService>();
+
 builder.Host.UseSerilog((context, services, configuration) =>
     configuration
         .ReadFrom.Configuration(context.Configuration)
@@ -366,6 +374,12 @@ app.MapAdminUserEndpoints();
 // Mapped before the catch-all so the literal routes always outrank it.
 app.MapSourcesEndpoints();
 app.MapUserAccountEndpoints();
+
+// M3T3: the §13.3 /admin/models namespace (list/create/get/patch/delete), all
+// [Authorize(Roles = "Admin")], cursor pagination per §13.13, probe-gated
+// writes (SQ-M3-11). Mapped before the catch-all so the literal routes always
+// outrank it.
+app.MapAdminModelEndpoints();
 
 // §13.12 AC: unmatched routes answer with an RFC 7807 404 instead of an
 // empty-bodied framework response. A `{**path}` catch-all (every method) is

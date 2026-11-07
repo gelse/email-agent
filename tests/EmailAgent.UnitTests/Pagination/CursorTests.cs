@@ -26,6 +26,10 @@ public class CursorTests
 
         var decoded = Cursor.Decode(encoded);
         decoded.CreatedAt.Should().Be(createdAt);
+        // M3T3 review S1: decode normalizes to UTC so a crafted/local offset
+        // can never reach Npgsql's timestamptz parameter as Offset != 0
+        // (mirrors CursorPagerTests' offset assertion).
+        decoded.CreatedAt.Offset.Should().Be(TimeSpan.Zero);
         decoded.Id.Should().Be(id);
     }
 
