@@ -47,7 +47,7 @@ This file is the operating manual for agents working in this repository: layout,
 
 ## Questions for a human
 
-Record a question in `questions/`; keep the human's answer verbatim; close a question by recording the decision and the place it is implemented.
+Record a question in `questions/`; keep the human's answer verbatim; close a question by recording the decision and the place it is implemented. `questions/` holds (a) open items and (b) — for questions actually put to a human — the verbatim answer, the adopted decision, and its `Implemented in:`/`Scheduled in:` citations; planning-time sub-questions decided during planning are recorded in the plan corpus (`plans/01-architecture.md`, milestone summaries, task files) and are not duplicated into `questions/`.
 
 ## Reports
 
