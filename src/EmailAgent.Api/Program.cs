@@ -11,6 +11,7 @@ using EmailAgent.Api.Sources;
 using EmailAgent.Contracts.AgentEngines;
 using EmailAgent.Core.Options;
 using EmailAgent.Infrastructure;
+using EmailAgent.Infrastructure.Agents;
 using EmailAgent.Infrastructure.Entities;
 using EmailAgent.Infrastructure.Plugins;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -226,6 +227,12 @@ builder.Services.AddScoped<IModelProbeService, ModelProbeService>();
 // row, system-keyed api-key blob and audit row commit in one transaction.
 builder.Services.AddScoped<EncryptedModelApiKeyStore>();
 builder.Services.AddScoped<ModelService>();
+
+// M3T4 (§11 / SQ-M3-17): the cost-derivation helper — provider cost
+// (x-litellm-cost header > usage.cost) > price-derived > NULL. Stateless and
+// pure (no I/O), so the M2T3/M2T5 singleton pattern applies; M3T6's
+// test-completion endpoint and M5's per-message cost write both resolve it.
+builder.Services.AddSingleton<ICostDerivationService, CostDerivationService>();
 
 builder.Host.UseSerilog((context, services, configuration) =>
     configuration
