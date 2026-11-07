@@ -145,22 +145,33 @@ public class Program
             return;
         }
 
-        var frames = StreamingFramesFor(scenario);
-        if (frames is null)
+        // M3T6 (SQ-M3-15): a failing call whose provider message echoes the key
+        // back — the sanitized-detail test asserts the key never reaches a
+        // response or a log line.
+        if (string.Equals(scenario, "error-key-echo", StringComparison.Ordinal))
         {
             await WriteJsonAsync(
-                context,
-                StatusCodes.Status400BadRequest,
-                JsonSerializer.Serialize(new
-                {
-                    error = new { message = $"unknown scenario '{scenario}'", type = "invalid_request_error" },
-                }));
+                context, StatusCodes.Status401Unauthorized, state.ReadFixture("error-key-echo.json"));
             return;
         }
 
         if (!stream)
         {
-            await WriteJsonAsync(context, StatusCodes.Status200OK, state.ReadFixture(NonStreamingFixtureFor(scenario)));
+            var fixture = NonStreamingFixtureFor(scenario);
+            if (fixture is null)
+            {
+                await WriteJsonAsync(context, StatusCodes.Status400BadRequest, UnknownScenarioBody(scenario));
+                return;
+            }
+
+            await WriteJsonAsync(context, StatusCodes.Status200OK, state.ReadFixture(fixture));
+            return;
+        }
+
+        var frames = StreamingFramesFor(scenario);
+        if (frames is null)
+        {
+            await WriteJsonAsync(context, StatusCodes.Status400BadRequest, UnknownScenarioBody(scenario));
             return;
         }
 
@@ -195,15 +206,24 @@ public class Program
             _ => null,
         };
 
-    /// <summary>The committed recording a non-streamed call replays for a known scenario.</summary>
-    private static string NonStreamingFixtureFor(string scenario) =>
+    /// <summary>The committed recording a non-streamed call replays, or <c>null</c> when the scenario is unknown.</summary>
+    private static string? NonStreamingFixtureFor(string scenario) =>
         scenario switch
         {
             "happy" => "happy-non-streaming.json",
             "probe-pass" => "probe-pass.json",
             "probe-fail" => "probe-fail.json",
-            _ => throw new InvalidOperationException($"scenario '{scenario}' has no non-streaming fixture"),
+            "provider-cost-non-streaming" => "provider-cost-non-streaming.json",
+            "cost-prices-non-streaming" => "cost-prices-non-streaming.json",
+            _ => null,
         };
+
+    /// <summary>The 400 body an unknown scenario gets on either branch.</summary>
+    private static string UnknownScenarioBody(string scenario) =>
+        JsonSerializer.Serialize(new
+        {
+            error = new { message = $"unknown scenario '{scenario}'", type = "invalid_request_error" },
+        });
 
     private static async Task WriteJsonAsync(HttpContext context, int statusCode, string json)
     {

@@ -228,6 +228,14 @@ builder.Services.AddScoped<IModelProbeService, ModelProbeService>();
 builder.Services.AddScoped<EncryptedModelApiKeyStore>();
 builder.Services.AddScoped<ModelService>();
 
+// M3T6 (§13.3 / SQ-M3-4 / SQ-M3-14 / SQ-M3-15): the admin test-completion
+// tool. Scoped for the same reason as M3T2/M3T3 — the request DbContext and
+// audit sink are shared with M3T3's catalog rows; the ENGINE resolves from
+// IPluginRegistry per call keyed by model_catalog.provider, so a provider
+// with no registered plugin fails with a clear 500 (SQ-M3-14) instead of
+// binding to the wrong plugin.
+builder.Services.AddScoped<TestCompletionService>();
+
 // M3T4 (§11 / SQ-M3-17): the cost-derivation helper — provider cost
 // (x-litellm-cost header > usage.cost) > price-derived > NULL. Stateless and
 // pure (no I/O), so the M2T3/M2T5 singleton pattern applies; M3T6's
@@ -387,6 +395,13 @@ app.MapUserAccountEndpoints();
 // writes (SQ-M3-11). Mapped before the catch-all so the literal routes always
 // outrank it.
 app.MapAdminModelEndpoints();
+
+// M3T6: POST /v1/admin/models/{id}/test-completion — Admin-only manual
+// exerciser (SQ-M3-16, additive §13.7 route): one non-streaming completion
+// through the M2T1 IAgentEngine seam, RFC 7807 errors, the standard
+// §13.14 envelope from the pipeline. Mapped before the catch-all so the
+// literal route outranks it.
+app.MapAdminTestCompletionEndpoints();
 
 // §13.12 AC: unmatched routes answer with an RFC 7807 404 instead of an
 // empty-bodied framework response. A `{**path}` catch-all (every method) is

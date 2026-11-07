@@ -97,4 +97,14 @@ public static class AuditActions
     /// its <c>model_api_key</c> blob in one transaction.
     /// </summary>
     public const string DeleteModel = "delete_model";
+
+    /// <summary>
+    /// M3T6 (Q-O17): <c>POST /v1/admin/models/{id}/test-completion</c> ran one
+    /// manual completion against the persisted model. <c>metadata_json</c>
+    /// carries the SQ-M3-4 field set (model/actor ids, duration, token counts,
+    /// cost, tool-call count, model name, base_url) plus
+    /// <c>prompt_sha256 = SHA-256("{system_prompt}\n{user_prompt}")</c> — the
+    /// prompt text itself is NEVER stored (SQ-M3-4 / Q-O17a).
+    /// </summary>
+    public const string TestModelCompletion = "test_model_completion";
 }
