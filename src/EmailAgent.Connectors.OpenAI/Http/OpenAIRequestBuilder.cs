@@ -41,11 +41,17 @@ public static class OpenAIRequestBuilder
     /// <see cref="OpenAIResponseMapper.MapFrame"/> maps onto the merged
     /// terminal <c>AgentDone</c>) — without it OpenAI omits <c>usage</c> from
     /// every streamed chunk. Non-streamed bodies omit the property entirely.
+    /// A non-null <paramref name="maxTokens"/> adds <c>max_tokens: N</c> to
+    /// the body (M3T2's probe transmits SQ-M3-3's canonical <c>max_tokens: 1</c>
+    /// cost bound through <see cref="EngineCallOptions.MaxTokens"/> — Q-L15);
+    /// <see langword="null"/> omits the member entirely, so every existing
+    /// call keeps its exact request shape.
     /// </remarks>
     /// <param name="req">The agent request (prompt, allowed action schemas).</param>
     /// <param name="cfg">The engine configuration supplying <c>model_name</c>.</param>
     /// <param name="stream">The <c>stream</c> flag for this call.</param>
-    internal static string Build(AgentRequest req, OpenAICompatibleConfig cfg, bool stream)
+    /// <param name="maxTokens">The <c>max_tokens</c> cap for this call; <see langword="null"/> omits the field.</param>
+    internal static string Build(AgentRequest req, OpenAICompatibleConfig cfg, bool stream, int? maxTokens = null)
     {
         ArgumentNullException.ThrowIfNull(req);
         ArgumentNullException.ThrowIfNull(cfg);
@@ -63,7 +69,8 @@ public static class OpenAIRequestBuilder
             Stream: stream,
             Tools: tools.Count > 0 ? tools : null,
             ToolChoice: tools.Count > 0 ? "auto" : null,
-            StreamOptions: stream ? new StreamOptions(IncludeUsage: true) : null);
+            StreamOptions: stream ? new StreamOptions(IncludeUsage: true) : null,
+            MaxTokens: maxTokens);
 
         return JsonSerializer.Serialize(request, OpenAIJsonOptions.Default);
     }
@@ -150,7 +157,9 @@ public static class OpenAIRequestBuilder
     /// The canonical OpenAI-compatible request body. <c>tools</c> /
     /// <c>tool_choice</c> are omitted (not <c>null</c>-written) when the caller
     /// allowed no schemas, keeping the body exactly in the documented shape;
-    /// <c>stream_options</c> is present only on streamed calls.
+    /// <c>stream_options</c> is present only on streamed calls; and
+    /// <c>max_tokens</c> is present only when the caller set
+    /// <see cref="EngineCallOptions.MaxTokens"/>.
     /// </summary>
     private sealed record ChatCompletionRequest(
         [property: JsonPropertyName("model")] string Model,
@@ -164,7 +173,10 @@ public static class OpenAIRequestBuilder
         string? ToolChoice = null,
         [property: JsonPropertyName("stream_options")]
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        StreamOptions? StreamOptions = null);
+        StreamOptions? StreamOptions = null,
+        [property: JsonPropertyName("max_tokens")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        int? MaxTokens = null);
 
     /// <summary>
     /// <c>stream_options</c> — <c>{"include_usage": true}</c> asks the

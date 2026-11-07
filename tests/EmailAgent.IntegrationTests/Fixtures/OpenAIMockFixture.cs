@@ -21,7 +21,9 @@ namespace EmailAgent.IntegrationTests.Fixtures;
 /// <see cref="SetScenarioAsync"/> steers the mock's ACTIVE scenario through its
 /// test-only control endpoint, which is how tests driving the engine (it sends
 /// no custom headers) select a response shape; <see cref="RequestCounts"/>
-/// exposes the per-scenario counters for cache/relay assertions. Two fixture
+/// exposes the per-scenario counters for cache/relay assertions and
+/// <see cref="LastRequestBody"/> the most recently received request body for
+/// wire-shape assertions. Two fixture
 /// instances are two independent mock hosts with independent state.
 /// </para>
 /// </remarks>
@@ -38,6 +40,15 @@ public sealed class OpenAIMockFixture : IAsyncLifetime
     /// <summary>Snapshot of the mock's per-scenario request counters.</summary>
     public IReadOnlyDictionary<string, int> RequestCounts =>
         Services.GetRequiredService<OpenAIMock.MockState>().RequestCounts;
+
+    /// <summary>
+    /// The raw body of the mock's most recently received chat-completions
+    /// request — the wire shape tests can assert on (M3T2's probe carrying
+    /// <c>max_tokens: 1</c> per SQ-M3-3 / Q-L15); <see langword="null"/> until
+    /// the first call.
+    /// </summary>
+    public string? LastRequestBody =>
+        Services.GetRequiredService<OpenAIMock.MockState>().LastRequestBody;
 
     private IServiceProvider Services =>
         (_factory ?? throw new InvalidOperationException(

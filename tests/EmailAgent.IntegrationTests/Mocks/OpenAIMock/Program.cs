@@ -136,7 +136,7 @@ public class Program
 
         var requestedScenario = context.Request.Headers[ScenarioHeader].FirstOrDefault();
         var scenario = string.IsNullOrWhiteSpace(requestedScenario) ? state.ActiveScenario : requestedScenario!;
-        state.RecordRequest(scenario);
+        state.RecordRequest(scenario, requestBody);
 
         if (string.Equals(scenario, "error", StringComparison.Ordinal))
         {
@@ -255,14 +255,16 @@ public class Program
 }
 
 /// <summary>
-/// The mock's mutable state: the active scenario plus a per-scenario request
-/// counter (<c>OpenAIMockFixture.RequestCounts</c> reads it from the host's DI).
+/// The mock's mutable state: the active scenario, a per-scenario request
+/// counter and the last received request body (<c>OpenAIMockFixture.RequestCounts</c>
+/// / <c>OpenAIMockFixture.LastRequestBody</c> read them from the host's DI).
 /// </summary>
 public sealed class MockState
 {
     private readonly object _sync = new();
     private readonly ConcurrentDictionary<string, int> _requestCounts = new(StringComparer.Ordinal);
     private string _activeScenario;
+    private string? _lastRequestBody;
 
     /// <summary>Creates the state around a fixture directory and an initial scenario.</summary>
     public MockState(string activeScenario, string fixtureDirectory)
@@ -298,13 +300,40 @@ public sealed class MockState
         }
     }
 
-    /// <summary>Counts one call against <paramref name="scenario"/>; returns the new count.</summary>
-    public int RecordRequest(string scenario) =>
-        _requestCounts.AddOrUpdate(scenario, 1, (_, current) => current + 1);
+    /// <summary>
+    /// Counts one call against <paramref name="scenario"/> and remembers the
+    /// raw request body for <see cref="LastRequestBody"/>; returns the new count.
+    /// </summary>
+    public int RecordRequest(string scenario, string requestBody)
+    {
+        lock (_sync)
+        {
+            _lastRequestBody = requestBody;
+        }
+
+        return _requestCounts.AddOrUpdate(scenario, 1, (_, current) => current + 1);
+    }
 
     /// <summary>Snapshot of the per-scenario request counters.</summary>
     public IReadOnlyDictionary<string, int> RequestCounts =>
         _requestCounts.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+
+    /// <summary>
+    /// The raw body of the most recently received chat-completions request
+    /// (test-only wire-shape assertions — e.g. M3T2's probe transmitting
+    /// <c>max_tokens: 1</c> per SQ-M3-3 / Q-L15); <see langword="null"/> until
+    /// the first call.
+    /// </summary>
+    public string? LastRequestBody
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _lastRequestBody;
+            }
+        }
+    }
 
     /// <summary>Reads a committed fixture body from <see cref="FixtureDirectory"/>.</summary>
     public string ReadFixture(string fileName) =>

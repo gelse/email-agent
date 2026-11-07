@@ -1,11 +1,14 @@
 using EmailAgent.Api.Audit;
 using EmailAgent.Api.Auth;
+using EmailAgent.Api.Config;
 using EmailAgent.Api.Configuration;
 using EmailAgent.Api.Endpoints;
 using EmailAgent.Api.Errors;
 using EmailAgent.Api.HealthChecks;
+using EmailAgent.Api.Models;
 using EmailAgent.Api.Options;
 using EmailAgent.Api.Sources;
+using EmailAgent.Contracts.AgentEngines;
 using EmailAgent.Core.Options;
 using EmailAgent.Infrastructure;
 using EmailAgent.Infrastructure.Entities;
@@ -188,6 +191,33 @@ builder.Services.AddTransient(sp =>
 // blob and audit row commit in one transaction.
 builder.Services.AddScoped<EncryptedSourceConfigStore>();
 builder.Services.AddScoped<SourceService>();
+
+// M3T2 (§11 / SQ-M3-3 / Q-L4): the tool-calling capabilities probe.
+// - ModelOptions binds the section "Model" (env MODEL__ProbeReprobeWindow,
+//   default 01:00:00) — deliberately its own section, never Agent (task step 2).
+//   ValidateDataAnnotations + ValidateOnStart fail fast on a malformed window.
+// - TimeProvider.System is the clock seam (cache-window tests substitute their own).
+// - The Func<IAgentEngine> factory resolves the openai-compatible engine from
+//   IPluginRegistry PER PROBE: the engine is a plugin instance, not a
+//   hand-rolled singleton, and the delegate is the unit-test seam (task step 7).
+// - IModelProbeService is SCOPED, not the task snippet's Singleton (deviation
+//   D1): a singleton would capture the scoped EmailAgentDbContext/IAuditLogger
+//   and fail ValidateScopes in Development — the same reason M2T5 registers
+//   SourceService scoped, and it shares M3T3's request DbContext.
+builder.Services.AddOptions<ModelOptions>()
+    .Bind(builder.Configuration.GetSection(ModelOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+builder.Services.AddSingleton<Func<IAgentEngine>>(sp =>
+{
+    var registry = sp.GetRequiredService<IPluginRegistry>();
+    return () => registry.GetAgentEngine(ModelProbeService.OpenAiCompatibleEngineTypeId)
+        ?? throw new InvalidOperationException(
+            $"Agent engine '{ModelProbeService.OpenAiCompatibleEngineTypeId}' is not loaded — the plugin "
+            + "loader must have completed a load cycle before a model probe can run (M3T2).");
+});
+builder.Services.AddScoped<IModelProbeService, ModelProbeService>();
 
 builder.Host.UseSerilog((context, services, configuration) =>
     configuration

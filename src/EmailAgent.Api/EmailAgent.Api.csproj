@@ -44,4 +44,18 @@
     <ProjectReference Include="../EmailAgent.Connectors.OpenAI/EmailAgent.Connectors.OpenAI.csproj" />
     <ProjectReference Include="../EmailAgent.Connectors.Telegram/EmailAgent.Connectors.Telegram.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      M3T2 (deviation D3): the probe seam is internal — IModelProbeService /
+      ModelProbeService take M3T1's internal OpenAICompatibleConfig, and CS0051
+      forbids exposing it through a public Api member. The suites construct the
+      service directly (fake IAgentEngine / in-process OpenAIMock), so they are
+      granted the Api's internals. Deliberately the same friend list
+      Connectors.OpenAI uses: every type reachable from the internal seam must
+      be visible to each granted assembly.
+    -->
+    <InternalsVisibleTo Include="EmailAgent.UnitTests" />
+    <InternalsVisibleTo Include="EmailAgent.IntegrationTests" />
+  </ItemGroup>
 </Project>

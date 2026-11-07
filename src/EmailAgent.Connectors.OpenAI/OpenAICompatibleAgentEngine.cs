@@ -118,6 +118,10 @@ public sealed class OpenAICompatibleAgentEngine : IAgentEngine
     /// and body) is bounded by <see cref="EngineCallOptions.Timeout"/> or
     /// <see cref="DefaultCallTimeout"/>; a deadline or transport timeout at
     /// any phase is reported as a 408 engine error, never as a cancellation.
+    /// The transmitted body carries <c>max_tokens: N</c> exactly when
+    /// <see cref="EngineCallOptions.MaxTokens"/> is set (M3T2's probe passes
+    /// SQ-M3-3's cost bound of 1; <see cref="EngineCallOptions.Default"/> keeps
+    /// the field off the wire).
     /// Throws <see cref="InvalidOperationException"/>
     /// when the caller supplied no engine configuration,
     /// <see cref="EngineCallException"/> on an HTTP error, an unmappable
@@ -163,7 +167,7 @@ public sealed class OpenAICompatibleAgentEngine : IAgentEngine
         deadline.CancelAfter(options.Timeout ?? DefaultCallTimeout);
         CancellationToken deadlineToken = deadline.Token;
 
-        var body = OpenAIRequestBuilder.Build(req, config, options.Stream);
+        var body = OpenAIRequestBuilder.Build(req, config, options.Stream, options.MaxTokens);
         var endpoint = config.BaseUrl.TrimEnd('/') + "/chat/completions";
 
         using var message = new HttpRequestMessage(HttpMethod.Post, endpoint)

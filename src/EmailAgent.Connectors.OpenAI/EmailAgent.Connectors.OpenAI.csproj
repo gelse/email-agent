@@ -28,7 +28,12 @@
       deliberately NOT referenced: it is inbox in net8.0 and nothing in this
       plugin needs its extension methods (JSON bodies go through
       StringContent + the shared OpenAIJsonOptions instance).
+      M3T2 (deviation D2): EmailAgent.Api joins the friend list — the probe
+      interface IModelProbeService takes the internal OpenAICompatibleConfig,
+      so naming the type in the Api layer requires internal visibility; the
+      type itself stays internal (CS0051 keeps the seam out of public APIs).
     -->
+    <InternalsVisibleTo Include="EmailAgent.Api" />
     <InternalsVisibleTo Include="EmailAgent.UnitTests" />
     <InternalsVisibleTo Include="EmailAgent.IntegrationTests" />
   </ItemGroup>

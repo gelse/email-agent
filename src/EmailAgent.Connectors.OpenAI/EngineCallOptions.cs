@@ -25,8 +25,19 @@ namespace EmailAgent.Connectors.OpenAI;
 /// Interactive callers (M3T2's probe, M3T6's admin test-completion) should
 /// pass a short value; background generations can keep the default.
 /// </param>
-public sealed record EngineCallOptions(bool Stream = false, TimeSpan? Timeout = null)
+/// <param name="MaxTokens">
+/// The <c>max_tokens</c> cap emitted on the chat-completions body when set;
+/// <see langword="null"/> (the default) omits the field entirely, so existing
+/// callers keep the uncapped request shape. M3T2's tool-calling probe passes
+/// <c>1</c> (SQ-M3-3's canonical cost bound — Q-L15); M3T6's test-completion
+/// can bound its own call the same way.
+/// </param>
+public sealed record EngineCallOptions(bool Stream = false, TimeSpan? Timeout = null, int? MaxTokens = null)
 {
-    /// <summary>The default call shape: a single non-streamed JSON response.</summary>
+    /// <summary>
+    /// The default call shape: a single non-streamed JSON response with no
+    /// <c>max_tokens</c> member on the wire (<see cref="MaxTokens"/> is
+    /// <see langword="null"/>).
+    /// </summary>
     public static readonly EngineCallOptions Default = new(Stream: false);
 }

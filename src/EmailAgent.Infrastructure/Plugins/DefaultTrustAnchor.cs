@@ -47,7 +47,7 @@ public sealed class DefaultTrustAnchor
         = new List<(string, string, string, byte[])>
         {
             ("imap", "1.0.0", "EmailAgent.Connectors.Imap", Convert.FromHexString("5f15502ff862d6590eb5f2e01b7d623ba2218dcf85bdb00bc5a62a649f46aaa2")),
-            ("openai-compatible", "1.0.0", "EmailAgent.Connectors.OpenAI", Convert.FromHexString("d4094ac4ac07a80a1ed742b5f1e86cd20f0c2dc4af273153a92bf768b0b62120")),
+            ("openai-compatible", "1.0.0", "EmailAgent.Connectors.OpenAI", Convert.FromHexString("baaa07cc7e7a8fa0151ff4bfdb78373c00dd9d2461c39352ccee7722cb93a252")),
             ("telegram-send", "1.0.0", "EmailAgent.Connectors.Telegram", Convert.FromHexString("508192b4897b6dfc98cc7257891c652602c6412fb490f1123606d64ca1fcd3a8")),
         };
 

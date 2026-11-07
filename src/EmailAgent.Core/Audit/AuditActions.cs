@@ -65,4 +65,15 @@ public static class AuditActions
     /// passphrase, the KEK or the DEK (Q-E9).
     /// </summary>
     public const string DekUnwrapFailed = "dek_unwrap_failed";
+
+    /// <summary>
+    /// M3T2 (Q-O17): the tool-calling capabilities probe rejected a model
+    /// (§11 / SQ-M3-11). Failure-only — pass outcomes ride as metadata on
+    /// M3T3's <c>CreateModel</c>/<c>UpdateModel</c> rows, so M3 has exactly one
+    /// probe audit action. <c>target_id</c> is the model id on the PATCH path
+    /// and <c>NULL</c> on the POST path (no catalog row exists yet);
+    /// <c>metadata_json</c> carries the canonical request wire body and a
+    /// 256-byte response excerpt — never the plaintext <c>api_key</c>.
+    /// </summary>
+    public const string ModelProbeFailed = "model_probe_failed";
 }

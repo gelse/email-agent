@@ -149,4 +149,51 @@ public class OpenAIRequestBuilderTests
         messages[0].GetProperty("role").GetString().Should().Be("user");
         messages[0].GetProperty("content").GetString().Should().Be("SYSTEM:\nonly a system half");
     }
+
+    // -----------------------------------------------------------------------
+    // Q-L15 (M3T2 follow-up): the additive EngineCallOptions.MaxTokens cap —
+    // emitted only when set, never by default.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void OpenAIRequestBuilder_WithMaxTokens_EmitsCostBound()
+    {
+        // M3T2's probe passes SQ-M3-3's canonical max_tokens: 1 through
+        // EngineCallOptions.MaxTokens — the field must reach the wire body.
+        var req = OpenAIFixtureFiles.Request(
+            prompt: "ping",
+            allowedActions: new Dictionary<string, JsonSchema>
+            {
+                ["ping"] = JsonSchema.FromText(
+                    """{"type":"object","description":"Probe tool; returns nothing.","properties":{},"additionalProperties":false}"""),
+            });
+
+        string json = OpenAIRequestBuilder.Build(
+            req, OpenAICompatibleConfig.FromJson(OpenAIFixtureFiles.HappyConfig()), stream: false, maxTokens: 1);
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("max_tokens").GetInt32().Should().Be(1);
+        doc.RootElement.GetProperty("stream").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public void OpenAIRequestBuilder_WithoutMaxTokens_OmitsCostBound()
+    {
+        // Default/null MaxTokens keeps the field entirely off the wire — the
+        // exact pre-Q-L15 request shape every existing caller still gets.
+        var req = OpenAIFixtureFiles.Request();
+
+        string nonStreamed = OpenAIRequestBuilder.Build(
+            req, OpenAICompatibleConfig.FromJson(OpenAIFixtureFiles.HappyConfig()), stream: false);
+        string streamed = OpenAIRequestBuilder.Build(
+            req, OpenAICompatibleConfig.FromJson(OpenAIFixtureFiles.HappyConfig()), stream: true);
+
+        using JsonDocument nonStreamedDoc = JsonDocument.Parse(nonStreamed);
+        nonStreamedDoc.RootElement.TryGetProperty("max_tokens", out _).Should().BeFalse(
+            "an unset MaxTokens must not add max_tokens to the non-streamed body");
+
+        using JsonDocument streamedDoc = JsonDocument.Parse(streamed);
+        streamedDoc.RootElement.TryGetProperty("max_tokens", out _).Should().BeFalse(
+            "an unset MaxTokens must not add max_tokens to the streamed body either");
+    }
 }
