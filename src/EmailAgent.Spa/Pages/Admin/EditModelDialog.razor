@@ -1,0 +1,414 @@
+@using System.Globalization
+@using EmailAgent.Contracts.Schema
+@inject ModelsClient ModelsApi
+@inject NavigationManager Nav
+
+@* M3T5: the hand-written add/edit model dialog (Q-F4 — no schema-driven
+   generation). The required flags are enumerated from
+   OpenAICompatibleConfigSchema through M2T2's JsonSchemaIntrospector, the
+   bounds mirror the task's field table, and RFC 7807 errors[] from the API
+   are rendered inline next to the field they name.
+
+   Three invariants live here: `provider` is read-only "openai-compatible"
+   (SQ-M3-14); `api_key` exists only in this password input — it is sent to
+   POST/PATCH and never echoed back, logged, or held in any list state (the
+   API's projection carries no key, so edit starts blank); and a failed probe
+   (400 /errors/model-probe-failed) renders its response excerpt in the red
+   banner with the dialog STILL OPEN, so base_url / model_name can be
+   corrected and resubmitted. *@
+<div class="modal-backdrop">
+    <div class="modal source-dialog" role="dialog" aria-modal="true"
+         aria-label="@(ModelId is null ? "Add model" : "Edit model")">
+        <h2>@(ModelId is null ? "Add model" : "Edit model")</h2>
+
+        @if (_loading)
+        {
+            <p>Loading…</p>
+        }
+        else
+        {
+            @if (_error is not null)
+            {
+                <div class="error-box" id="model-error" role="alert">@_error</div>
+            }
+
+            <div class="form-field">
+                <label for="model-display-name">Display name</label>
+                <input id="model-display-name" class="form-control" maxlength="200"
+                       @bind="_displayName" />
+                @FieldError("display_name")
+            </div>
+
+            <div class="form-field">
+                <label for="model-provider">Provider</label>
+                <input id="model-provider" class="form-control" value="@Provider" readonly />
+                <span class="hint" id="model-provider-note">
+                    Only the @Provider plugin ships in M3.
+                </span>
+            </div>
+
+            <div class="form-field">
+                <label for="model-base-url">Base URL</label>
+                <input id="model-base-url" class="form-control" @bind="_baseUrl" />
+                @FieldError("base_url")
+                <span class="hint" id="model-base-url-note">
+                    Absolute http:// or https:// endpoint, e.g. https://api.example.test/v1
+                </span>
+            </div>
+
+            <div class="form-field">
+                <label for="model-model-name">Model name</label>
+                <input id="model-model-name" class="form-control" @bind="_modelName" />
+                @FieldError("model_name")
+            </div>
+
+            <div class="form-field">
+                <label for="model-api-key">API key</label>
+                <input id="model-api-key" type="password" class="form-control"
+                       autocomplete="new-password" @bind="_apiKey" />
+                @FieldError("api_key")
+                <span class="hint" id="model-api-key-note">
+                    @(ModelId is null
+                        ? "Required — the model cannot be called without it."
+                        : "Leave blank to keep the stored key.")
+                </span>
+            </div>
+
+            <div class="form-field">
+                <label for="model-price-input">Price per 1k input USD</label>
+                <input id="model-price-input" class="form-control" type="number"
+                       min="0" max="1000" step="any" @bind="_priceInput" />
+                @FieldError("price_per_1k_input_usd")
+                <span class="hint" id="model-price-input-note">Optional — between 0 and 1000.</span>
+            </div>
+
+            <div class="form-field">
+                <label for="model-price-output">Price per 1k output USD</label>
+                <input id="model-price-output" class="form-control" type="number"
+                       min="0" max="1000" step="any" @bind="_priceOutput" />
+                @FieldError("price_per_1k_output_usd")
+                <span class="hint" id="model-price-output-note">Optional — between 0 and 1000.</span>
+            </div>
+
+            <div class="form-field form-check">
+                <label for="model-enabled">Enabled</label>
+                <input id="model-enabled" type="checkbox" @bind="_enabled" />
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="btn-primary" id="model-save"
+                        disabled="@(_busy || _gone)" @onclick="SaveAsync">
+                    @(_busy ? "Saving…" : "Save")
+                </button>
+                <button type="button" class="btn-secondary" id="model-cancel"
+                        disabled="@_busy" @onclick="OnCancel">Cancel</button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Null for "Add model"; the id of the row being edited otherwise.</summary>
+    [Parameter]
+    public Guid? ModelId { get; set; }
+
+    [Parameter, EditorRequired]
+    public EventCallback OnCancel { get; set; }
+
+    /// <summary>Raised with the saved projection so the parent can refresh its list.</summary>
+    [Parameter, EditorRequired]
+    public EventCallback<ModelDto> OnSaved { get; set; }
+
+    /// <summary>The one provider M3 ships (SQ-M3-14 — rendered read-only above).</summary>
+    private const string Provider = "openai-compatible";
+
+    /// <summary>The problem type whose detail IS the probe's response excerpt (M3T3).</summary>
+    private const string ProbeFailedType = "/errors/model-probe-failed";
+
+    /// <summary>Wire names the API can blame, so stray errors[] entries land in the banner instead.</summary>
+    private static readonly HashSet<string> KnownFieldNames = new(StringComparer.Ordinal)
+    {
+        "display_name", "provider", "base_url", "model_name", "api_key",
+        "price_per_1k_input_usd", "price_per_1k_output_usd", "enabled",
+    };
+
+    private string _displayName = string.Empty;
+    private string _baseUrl = string.Empty;
+    private string _modelName = string.Empty;
+    private string _apiKey = string.Empty;
+    private string _priceInput = string.Empty;
+    private string _priceOutput = string.Empty;
+    private bool _enabled = true;
+
+    private readonly Dictionary<string, string> _fieldErrors = new(StringComparer.Ordinal);
+    private string? _error;
+    private bool _loading;
+    private bool _busy;
+
+    /// <summary>
+    /// The model vanished between the list and the dialog (deleted in another
+    /// tab). The form is shown but dead — Save would PATCH an id that no
+    /// longer exists — so only Cancel stays available.
+    /// </summary>
+    private bool _gone;
+
+    /// <summary>
+    /// Edit mode only: GET /v1/admin/models/{id} pre-fills every field. The
+    /// projection carries no api_key, so that field starts blank (task Risks
+    /// "PATCH semantics on api_key").
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        if (ModelId is not { } id)
+        {
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            var model = await ModelsApi.GetAsync(id);
+            _displayName = model.DisplayName;
+            _baseUrl = model.BaseUrl;
+            _modelName = model.ModelName;
+            _priceInput = FormatPrice(model.PricePer1kInputUsd);
+            _priceOutput = FormatPrice(model.PricePer1kOutputUsd);
+            _enabled = model.Enabled;
+            _apiKey = string.Empty;
+        }
+        catch (ModelsApiException ex) when (ex.Status == HttpStatusCode.NotFound)
+        {
+            _gone = true;
+            _error = "This model no longer exists — it may have been deleted in another tab. "
+                + "Close this dialog to see the current list.";
+        }
+        catch (ModelsApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (ModelsApiException ex)
+        {
+            _error = ex.FriendlyMessage;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>
+    /// Save: POST on create, PATCH on edit (api_key member only when the
+    /// field is non-empty). Client-side checks run first — no network call
+    /// for a form the schema already rejects — then RFC 7807 <c>errors[]</c>
+    /// are rendered inline per field and a failed probe lands in the red
+    /// banner with the dialog open. Success closes the dialog and lets the
+    /// parent refresh.
+    /// </summary>
+    private async Task SaveAsync()
+    {
+        _error = null;
+
+        if (!Validate())
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            if (ModelId is not { } id)
+            {
+                var created = await ModelsApi.CreateAsync(new CreateModelRequest
+                {
+                    DisplayName = _displayName.Trim(),
+                    Provider = Provider,
+                    BaseUrl = _baseUrl.Trim(),
+                    ModelName = _modelName.Trim(),
+                    ApiKey = _apiKey,
+                    PricePer1kInputUsd = PriceOrNull(_priceInput),
+                    PricePer1kOutputUsd = PriceOrNull(_priceOutput),
+                    Enabled = _enabled,
+                });
+                await OnSaved.InvokeAsync(created);
+            }
+            else
+            {
+                var updated = await ModelsApi.UpdateAsync(id, new UpdateModelRequest
+                {
+                    DisplayName = _displayName.Trim(),
+                    Provider = Provider,
+                    BaseUrl = _baseUrl.Trim(),
+                    ModelName = _modelName.Trim(),
+
+                    // Blank means "keep the stored credential": a null member
+                    // is absent from the body entirely, so the server never
+                    // re-wraps anything (task Risks, PATCH semantics).
+                    ApiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey,
+                    PricePer1kInputUsd = PriceOrNull(_priceInput),
+                    PricePer1kOutputUsd = PriceOrNull(_priceOutput),
+                    Enabled = _enabled,
+                });
+                await OnSaved.InvokeAsync(updated);
+            }
+        }
+        catch (ModelsApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (ModelsApiException ex)
+        {
+            ApplyProblem(ex);
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>
+    /// Client-side gate before any request: the required member list comes
+    /// from <c>OpenAICompatibleConfigSchema</c> through
+    /// <c>JsonSchemaIntrospector.ListFields</c> (never re-typed), plus the
+    /// task's own display-name, URL-format and price-bound rules.
+    /// </summary>
+    private bool Validate()
+    {
+        _fieldErrors.Clear();
+
+        if (string.IsNullOrWhiteSpace(_displayName))
+        {
+            _fieldErrors["display_name"] = "Display name is required.";
+        }
+        else if (_displayName.Trim().Length > 200)
+        {
+            _fieldErrors["display_name"] = "Display name must be 200 characters or fewer.";
+        }
+
+        foreach (var field in JsonSchemaIntrospector.ListFields(OpenAICompatibleConfigSchema.Build()))
+        {
+            if (!field.Required)
+            {
+                continue;
+            }
+
+            // On edit a blank api_key keeps the stored one — the schema's
+            // "required" is already satisfied by the catalog row's blob.
+            if (field.Name == "api_key" && ModelId is not null)
+            {
+                continue;
+            }
+
+            var supplied = field.Name switch
+            {
+                "base_url" => !string.IsNullOrWhiteSpace(_baseUrl),
+                "api_key" => !string.IsNullOrWhiteSpace(_apiKey),
+                "model_name" => !string.IsNullOrWhiteSpace(_modelName),
+                _ => true,
+            };
+
+            if (!supplied)
+            {
+                _fieldErrors[field.Name] = Label(field.Name) + " is required.";
+            }
+        }
+
+        // Format check only when a value is present — the required rule above
+        // owns the empty case, so this never overwrites it.
+        if (!string.IsNullOrWhiteSpace(_baseUrl) && !IsHttpUrl(_baseUrl))
+        {
+            _fieldErrors["base_url"] = "Base URL must be an absolute http:// or https:// URL.";
+        }
+
+        ValidatePrice("price_per_1k_input_usd", "Price per 1k input USD", _priceInput);
+        ValidatePrice("price_per_1k_output_usd", "Price per 1k output USD", _priceOutput);
+        return _fieldErrors.Count == 0;
+    }
+
+    private void ValidatePrice(string wireName, string label, string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return; // both prices are nullable members
+        }
+
+        if (!decimal.TryParse(raw.Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var price))
+        {
+            _fieldErrors[wireName] = $"{label} must be a number.";
+            return;
+        }
+
+        if (price < 0m || price > 1000m)
+        {
+            _fieldErrors[wireName] = $"{label} must be between 0 and 1000.";
+        }
+    }
+
+    /// <summary>
+    /// Attaches a refusal to the right place: the probe excerpt to the red
+    /// banner (dialog stays open), known <c>errors[]</c> names inline, the
+    /// rest to the banner through the friendly message (429 included).
+    /// </summary>
+    private void ApplyProblem(ModelsApiException exception)
+    {
+        if (exception.Problem?.Type == ProbeFailedType)
+        {
+            var excerpt = string.IsNullOrWhiteSpace(exception.Problem.Detail)
+                ? exception.Message
+                : exception.Problem.Detail;
+            _error = $"Probe failed: {excerpt}";
+            return;
+        }
+
+        var mapped = 0;
+        foreach (var entry in exception.FieldErrors)
+        {
+            if (entry.Name is not null && KnownFieldNames.Contains(entry.Name))
+            {
+                _fieldErrors[entry.Name] = entry.Reason ?? string.Empty;
+                mapped++;
+            }
+        }
+
+        if (mapped == 0)
+        {
+            _error = exception.FriendlyMessage;
+        }
+    }
+
+    /// <summary>An absolute http/https URL — the task's client-side base_url rule.</summary>
+    private static bool IsHttpUrl(string value)
+        => Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    private static decimal? PriceOrNull(string? raw)
+        => !string.IsNullOrWhiteSpace(raw)
+            && decimal.TryParse(
+                raw.Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var price)
+            ? price
+            : null;
+
+    private static string FormatPrice(decimal? price)
+        => price?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+
+    private MarkupString FieldError(string name)
+        => _fieldErrors.TryGetValue(name, out var reason)
+            ? new MarkupString($"<div class=\"validation-message\" id=\"error-{name}\">{System.Net.WebUtility.HtmlEncode(reason)}</div>")
+            : default;
+
+    private static string Label(string name) => name switch
+    {
+        "display_name" => "Display name",
+        "base_url" => "Base URL",
+        "model_name" => "Model name",
+        "api_key" => "API key",
+        _ => char.ToUpperInvariant(name[0]) + name[1..],
+    };
+}

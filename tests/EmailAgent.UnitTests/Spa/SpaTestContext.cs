@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Bunit;
 using EmailAgent.Spa.Auth;
+using EmailAgent.Spa.Models;
 using EmailAgent.Spa.Notifications;
 using EmailAgent.Spa.Sources;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,7 +16,8 @@ namespace EmailAgent.UnitTests.Spa;
 /// registered, plus a programmable stub <see cref="HttpMessageHandler"/>
 /// standing in for the API (no test ever reaches a real service — AGENTS.md
 /// hard constraint 3). M2T6 adds the toast bus and the typed
-/// <see cref="SourcesClient"/> over the same stub, mirroring Program.cs.
+/// <see cref="SourcesClient"/> over the same stub, M3T5 the typed
+/// <see cref="ModelsClient"/>, both mirroring Program.cs.
 /// </summary>
 internal sealed class SpaTestContext : TestContext
 {
@@ -31,8 +33,10 @@ internal sealed class SpaTestContext : TestContext
 
         // M2T6: same registrations as Program.cs — one toast queue per test
         // and the sources client bound to the stubbed "Api" HttpClient.
+        // M3T5: the models client over that same stub (Program.cs parity).
         Services.AddSingleton<ToastService>();
         Services.AddScoped(sp => new SourcesClient(sp.GetRequiredService<HttpClient>()));
+        Services.AddScoped(sp => new ModelsClient(sp.GetRequiredService<HttpClient>()));
     }
 
     /// <summary>The stub transport every page's injected HttpClient uses.</summary>

@@ -11,6 +11,9 @@
     <AuthorizeView Roles="Admin">
         <Authorized>
             <NavLink class="nav-link" href="/admin/users" Match="NavLinkMatch.Prefix">Users</NavLink>
+            @* M3T5: the milestone's admin catalog screen was reachable only by
+               typing the URL. *@
+            <NavLink class="nav-link" href="/admin/models" Match="NavLinkMatch.Prefix">Models</NavLink>
         </Authorized>
     </AuthorizeView>
     <AuthorizeView>

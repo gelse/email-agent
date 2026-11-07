@@ -1,0 +1,84 @@
+@namespace EmailAgent.Spa.Pages.Admin
+
+@* M3T5: the delete confirmation modal (task scope bullet) — same shape as
+   M2T6's DeleteSourceConfirm: the row keeps its place until the API accepts
+   the DELETE, a refusal renders inline with the modal open, and a 404 still
+   counts as deleted (the goal state already holds). *@
+<div class="modal-backdrop" @onclick="OnCancel">
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-model-title"
+         @onclick:stopPropagation="true">
+        <h3 id="delete-model-title">Delete model</h3>
+        @if (Model is not null)
+        {
+            <p>
+                Delete <strong>@Model.DisplayName</strong>? Its stored API key is
+                removed with it. This cannot be undone.
+            </p>
+        }
+        @if (!string.IsNullOrEmpty(Error))
+        {
+            <div class="error-box" id="delete-model-error" role="alert">@Error</div>
+        }
+        <div class="modal-actions">
+            <button type="button" class="btn-danger" id="delete-model-confirm"
+                    disabled="@Busy" @onclick="ConfirmAsync">
+                @(Busy ? "Deleting…" : "Delete")
+            </button>
+            <button type="button" class="btn-secondary" id="delete-model-cancel"
+                    disabled="@Busy" @onclick="OnCancel">
+                Cancel
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>The model to delete, used for the confirmation wording.</summary>
+    [Parameter, EditorRequired] public ModelDto? Model { get; set; }
+
+    /// <summary>Invoked after the API accepted the deletion, so the list can refresh.</summary>
+    [Parameter] public EventCallback OnDeleted { get; set; }
+
+    /// <summary>Closes the modal without deleting.</summary>
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    [Inject] private ModelsClient Models { get; set; } = default!;
+
+    private bool Busy;
+    private string? Error;
+
+    private async Task ConfirmAsync()
+    {
+        if (Model is null || Busy)
+        {
+            return;
+        }
+
+        Busy = true;
+        Error = null;
+        try
+        {
+            await Models.DeleteAsync(Model.Id);
+            await OnDeleted.InvokeAsync();
+        }
+        catch (ModelsApiException ex)
+        {
+            // A missing model (404) still means the goal state holds: it is gone.
+            if (ex.Status == HttpStatusCode.NotFound)
+            {
+                await OnDeleted.InvokeAsync();
+                return;
+            }
+
+            Error = ex.FriendlyMessage;
+        }
+        catch (HttpRequestException)
+        {
+            Error = "Could not reach the API.";
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+}

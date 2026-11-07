@@ -413,3 +413,126 @@ code {
     cursor: pointer;
     padding: 0;
 }
+
+/* ------------------------------------------------------------------ *
+ * M3T5: admin models table, status badges, filters, test-dialog rows  *
+ * ------------------------------------------------------------------ */
+
+.model-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border: 1px solid #dde3ea;
+    font-size: 0.875rem;
+}
+
+    .model-table th,
+    .model-table td {
+        text-align: left;
+        padding: 0.5rem 0.65rem;
+        border-bottom: 1px solid #eef2f6;
+        vertical-align: middle;
+    }
+
+    .model-table th {
+        background: #f3f6f9;
+        font-weight: 600;
+    }
+
+.model-actions {
+    white-space: nowrap;
+}
+
+    .model-actions .btn-secondary,
+    .model-actions .btn-primary {
+        margin: 0.15rem 0.25rem 0.15rem 0;
+    }
+
+.model-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 1rem;
+    font-size: 0.875rem;
+}
+
+    .model-filters label {
+        color: #334155;
+    }
+
+    .model-filters .form-control {
+        max-width: 14rem;
+    }
+
+.badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.badge-ok {
+    background: #f0fdf4;
+    border-color: #86efac;
+    color: #166534;
+}
+
+.badge-fail {
+    background: #fef2f2;
+    border-color: #fca5a5;
+    color: #991b1b;
+}
+
+.badge-off {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #475569;
+}
+
+.badge-muted {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+    color: #64748b;
+}
+
+.tool-row {
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 0.6rem;
+    margin-bottom: 0.5rem;
+    background: #f8fafc;
+}
+
+.test-dialog {
+    width: 640px;
+    max-height: 76vh;
+    overflow-y: auto;
+}
+
+.test-response {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    border: 1px solid #cfe8d6;
+    border-radius: 4px;
+    background: #f6fdf8;
+    font-size: 0.875rem;
+    word-break: break-word;
+}
+
+    .test-response h3 {
+        margin-top: 0;
+    }
+
+    .test-response code {
+        display: inline-block;
+        padding: 0 0.25rem;
+        background: #eef2f6;
+        border-radius: 3px;
+        word-break: break-all;
+    }
+
