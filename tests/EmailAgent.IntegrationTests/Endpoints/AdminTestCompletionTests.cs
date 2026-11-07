@@ -23,7 +23,7 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 // M3T6: POST /v1/admin/models/{id}/test-completion against Testcontainers
 // Postgres + the real host, with the M3T1 engine driving the in-process
 // OpenAIMock through the IPluginRegistry seam — no socket, no real provider
-// (AGENTS.md test constraint; http://litellm.gelse.lan/v1 never appears).
+// (AGENTS.md test constraint; the real dev LLM endpoint never appears).
 //
 // Isolation rules (M3T3 parity):
 //  - one unique `m3t6-<guid>` marker per test: the model_name the DisposeAsync
@@ -266,7 +266,7 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
         var detail = problem.GetProperty("detail").GetString();
         detail.Should().NotBeNullOrWhiteSpace("detail explains the provider failure");
         detail.Should().NotContain(
-            "sk-echoed-key-do-not-log-1234567890",
+            "sk-test-redacted",
             "SQ-M3-15: a key echoed by the provider is redacted before the detail leaves the process");
         detail.Should().Contain("sk-REDACTED", "the redaction marker proves scrubbing, not truncation");
         Encoding.UTF8.GetByteCount(detail!)
