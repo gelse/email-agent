@@ -19,6 +19,20 @@ ARTIFACT_LOG="$ROOT_DIR/artifacts/smoke-failure.log"
 CURRENT_FORM="startup"
 BASE_URL=""
 DIAG_DONE=0
+
+# Writability pre-check (decision Q-O24, 2026-11-07): fail fast with an actionable message when artifacts/
+# is unwritable (typically root-owned leftovers from container runs) instead
+# of letting the run reach dump_diagnostics() and then point at a
+# smoke-failure.log that was silently never written.
+if ! mkdir -p "$ROOT_DIR/artifacts" 2>/dev/null || ! touch "$ROOT_DIR/artifacts/.write-probe" 2>/dev/null; then
+    echo "FAIL: $ROOT_DIR/artifacts is not writable (mkdir or write probe failed)" >&2
+    echo "      likely cause: root-owned files/dirs left by container runs." >&2
+    echo "      fix: sudo chown -R \"$(id -u):$(id -g)\" artifacts/   (or: sudo rm -rf artifacts/)" >&2
+    echo "      pre-check: fail here instead of a later 'SMOKE FAILED; diagnostics: artifacts/smoke-failure.log' pointing at a log that was never written." >&2
+    exit 1
+fi
+rm -f "$ROOT_DIR/artifacts/.write-probe" 2>/dev/null || true
+
 rm -f "$ARTIFACT_LOG" 2>/dev/null || true
 
 ADHOC_CONTAINER=""

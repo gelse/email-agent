@@ -88,6 +88,85 @@ public class PluginManifestTests
     }
 
     [Fact]
+    public void PluginManifest_FromJson_RejectsLegacyId_And_NamesPluginIdReplacement()
+    {
+        // Legacy 'id' without 'plugin_id': must fail loudly naming both the
+        // legacy field and its replacement, not with the generic
+        // missing-'plugin_id' error (human decision 11).
+        using var doc = JsonDocument.Parse(
+            """{"id":"imap","version":"1.0.0","assembly":"a.dll","type":"T"}""");
+
+        var act = () => PluginManifest.FromJsonElement(doc.RootElement);
+
+        act.Should().Throw<JsonException>()
+            .WithMessage("*legacy field 'id'*plugin_id*");
+
+        // Unconditional: the legacy name is rejected even when the canonical
+        // replacement is also present (stale field must never be tolerated).
+        using (var both = JsonDocument.Parse(
+            """{"plugin_id":"imap","id":"imap","version":"1.0.0","assembly":"a.dll","type":"T"}"""))
+        {
+            var actBoth = () => PluginManifest.FromJsonElement(both.RootElement);
+            actBoth.Should().Throw<JsonException>()
+                .WithMessage("*legacy field 'id'*plugin_id*");
+        }
+    }
+
+    [Fact]
+    public void PluginManifest_FromJson_RejectsLegacyRequiredCapabilities_And_NamesCapabilitiesReplacement()
+    {
+        // Legacy 'required_capabilities' must be rejected rather than read as
+        // an absent 'capabilities' member (silent zero-grant).
+        using var doc = JsonDocument.Parse(
+            """{"plugin_id":"x","version":"1.0.0","assembly":"a.dll","type":"T","required_capabilities":["http_egress"]}""");
+
+        var act = () => PluginManifest.FromJsonElement(doc.RootElement);
+
+        act.Should().Throw<JsonException>()
+            .WithMessage("*legacy field 'required_capabilities'*'capabilities'*");
+
+        // Unconditional: rejected even alongside a valid 'capabilities' array.
+        using (var both = JsonDocument.Parse(
+            """{"plugin_id":"x","version":"1.0.0","assembly":"a.dll","type":"T","capabilities":[],"required_capabilities":["http_egress"]}"""))
+        {
+            var actBoth = () => PluginManifest.FromJsonElement(both.RootElement);
+            actBoth.Should().Throw<JsonException>()
+                .WithMessage("*legacy field 'required_capabilities'*'capabilities'*");
+        }
+    }
+
+    [Fact]
+    public void PluginManifest_FromJson_Sq1ShapedManifest_StillParses()
+    {
+        // The shipped SQ-1 shape (the plugin.json manifests on disk use
+        // exactly these names) must keep parsing — guards against
+        // over-rejecting.
+        using var doc = JsonDocument.Parse(
+            """
+            {
+              "plugin_id": "telegram-send",
+              "version": "1.0.0",
+              "assembly": "EmailAgent.Connectors.Telegram.dll",
+              "type": "EmailAgent.Connectors.Telegram.TelegramStubMessageSource",
+              "capabilities": ["processed_messages_write", "http_egress"],
+              "http_allowlist": ["api.telegram.org"],
+              "notes": "Stub for M2T3"
+            }
+            """);
+
+        var manifest = PluginManifest.FromJsonElement(doc.RootElement);
+
+        manifest.PluginId.Should().Be("telegram-send");
+        manifest.Version.Should().Be("1.0.0");
+        manifest.AssemblyName.Should().Be("EmailAgent.Connectors.Telegram.dll");
+        manifest.TypeName.Should().Be("EmailAgent.Connectors.Telegram.TelegramStubMessageSource");
+        manifest.Capabilities.Should().BeEquivalentTo(
+            new[] { Capability.ProcessedMessagesWrite, Capability.HttpEgress });
+        manifest.HttpAllowlist.Should().Equal("api.telegram.org");
+        manifest.Notes.Should().Be("Stub for M2T3");
+    }
+
+    [Fact]
     public void PluginManifest_FromJson_NormalizesCompositeCapabilities_And_RejectsUnknownOnes()
     {
         // A combined comma-separated value (what the enum converter itself

@@ -51,12 +51,28 @@ public record PluginManifest(
     /// <c>capabilities</c> and <c>http_allowlist</c> default to empty when
     /// absent (an absent capability set grants nothing — the loader validates
     /// grants in M2T3); <c>notes</c> is optional. Any present-but-mistyped
-    /// member throws <see cref="JsonException"/>.
+    /// member throws <see cref="JsonException"/>, as do the legacy pre-SQ-1
+    /// field names <c>id</c> and <c>required_capabilities</c> (the error names
+    /// their replacement: <c>plugin_id</c> / <c>capabilities</c>)
+    /// (decision Q-C9, 2026-11-07).
     /// </summary>
     public static PluginManifest FromJsonElement(JsonElement el)
     {
         if (el.ValueKind != JsonValueKind.Object)
             throw new JsonException($"plugin manifest must be a JSON object, was {el.ValueKind}");
+
+        // Pre-SQ-1 legacy names are otherwise read as absent members: a
+        // manifest authored with 'required_capabilities' silently yields an
+        // empty capability set (zero-grant), and a legacy 'id' reports a
+        // generic missing-'plugin_id' error that never names the stale field
+        // (plans/implementation/M2T1-connector-framework-contracts.md, deviation
+        // 6). Reject them loudly, naming the replacement — human decision 11.
+        if (el.TryGetProperty("id", out _))
+            throw new JsonException(
+                "plugin manifest uses legacy field 'id'; use 'plugin_id' per the M2 SQ-1 manifest schema");
+        if (el.TryGetProperty("required_capabilities", out _))
+            throw new JsonException(
+                "plugin manifest uses legacy field 'required_capabilities'; use 'capabilities' per the M2 SQ-1 manifest schema");
 
         string RequiredString(string name)
         {

@@ -37,7 +37,19 @@ cd "$ROOT_DIR"
 
 PROJECT="emailagent-m2-smoke"
 ARTIFACT_DIR="artifacts/m2t7"
-mkdir -p "$ARTIFACT_DIR"
+
+# Writability pre-check (decision Q-O24, 2026-11-07): fail fast with an actionable message when artifacts/
+# is unwritable (typically root-owned leftovers from container runs) instead
+# of dying later with a bare 'Permission denied' on the first unguarded
+# artifact write (smoke-headers.tmp) or a misleading step failure.
+if ! mkdir -p "$ARTIFACT_DIR" 2>/dev/null || ! touch "$ARTIFACT_DIR/.write-probe" 2>/dev/null; then
+    printf '[m2t7] FAIL: %s is not writable (mkdir or write probe failed)\n' "$ROOT_DIR/$ARTIFACT_DIR" >&2
+    printf '[m2t7]       likely cause: root-owned files/dirs left by container runs.\n' >&2
+    printf '[m2t7]       fix: sudo chown -R %s:%s artifacts/   (or: sudo rm -rf artifacts/)\n' "$(id -u)" "$(id -g)" >&2
+    printf '[m2t7]       pre-check: fail here instead of a bare "Permission denied" writing smoke-headers.tmp later.\n' >&2
+    exit 1
+fi
+rm -f "$ARTIFACT_DIR/.write-probe" 2>/dev/null || true
 
 log()  { printf '[m2t7] %s\n' "$*"; }
 fail() { printf '[m2t7] FAIL (step %s): %s\n' "${STEP:-0}" "$*" >&2; exit 1; }
