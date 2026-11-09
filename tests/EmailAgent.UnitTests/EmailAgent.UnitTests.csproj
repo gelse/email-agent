@@ -14,6 +14,10 @@
     <!-- M1T8: bUnit for the Blazor WASM pages (SPA test project scope). -->
     <PackageReference Include="bunit" Version="1.40.0" />
     <PackageReference Include="bunit.web" Version="1.40.0" />
+    <!-- M9T2 NU1902 (GHSA-pgww-w46g-26qg / CVE-2026-54570, moderate): bUnit's
+         transitive AngleSharp 1.2.0 is vulnerable; 1.5.0 is the patched
+         release. Direct pin over the transitive floor (bunit stays 1.40.0). -->
+    <PackageReference Include="AngleSharp" Version="1.5.0" />
     <PackageReference Include="FluentAssertions" Version="6.12.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.32" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
