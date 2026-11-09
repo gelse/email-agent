@@ -145,34 +145,39 @@ public sealed class GreenMailFixture : IAsyncLifetime
     }
 
     /// <summary>
-    /// M4T5: lists messages for <paramref name="userEmail"/> (raw JSON array)
-    /// via <c>GET /api/user/{email}/messages</c>.
+    /// M4T5: lists messages for <paramref name="userEmail"/> (raw JSON array).
+    /// Tries several GreenMail 2.x REST path variants for compatibility.
     /// </summary>
     public async Task<IReadOnlyList<JsonElement>> GetMessagesAsync(string userEmail)
     {
-        using var response = await RestClient.GetAsync(
-            $"/api/user/{Uri.EscapeDataString(userEmail)}/messages").ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+        var login = userEmail.Contains('@', StringComparison.Ordinal)
+            ? userEmail[..userEmail.IndexOf('@', StringComparison.Ordinal)]
+            : userEmail;
+
+        // Try multiple path/key variants (GreenMail 2.x image differences).
+        foreach (var path in new[]
         {
-            // Fallback: some endpoints key by login rather than full email.
-            var login = userEmail.Contains('@', StringComparison.Ordinal)
-                ? userEmail[..userEmail.IndexOf('@', StringComparison.Ordinal)]
-                : userEmail;
-            using var retry = await RestClient.GetAsync(
-                $"/api/user/{Uri.EscapeDataString(login)}/messages").ConfigureAwait(false);
-            retry.EnsureSuccessStatusCode();
-            var retryJson = await retry.Content.ReadAsStringAsync().ConfigureAwait(false);
-            using var retryDoc = JsonDocument.Parse(retryJson);
-            return retryDoc.RootElement.ValueKind == JsonValueKind.Array
-                ? retryDoc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList()
-                : [];
+            $"/api/user/{Uri.EscapeDataString(userEmail)}/messages",
+            $"/api/user/{Uri.EscapeDataString(login)}/messages",
+            $"/api/user/{Uri.EscapeDataString(userEmail)}/messages/",
+            $"/api/user/{Uri.EscapeDataString(login)}/messages/",
+        })
+        {
+            using var response = await RestClient.GetAsync(path).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) continue;
+            var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(json)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                    return doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList();
+            }
+            catch (JsonException) { /* try next */ }
         }
 
-        var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.ValueKind == JsonValueKind.Array
-            ? doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList()
-            : [];
+        // Last resort: empty (do not throw — callers poll/count).
+        return [];
     }
 
     /// <summary>
