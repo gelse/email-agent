@@ -8,6 +8,7 @@ using EmailAgent.Api.HealthChecks;
 using EmailAgent.Api.Models;
 using EmailAgent.Api.Options;
 using EmailAgent.Api.Sources;
+using EmailAgent.Api.Actions;
 using EmailAgent.Contracts.AgentEngines;
 using EmailAgent.Core.Options;
 using EmailAgent.Infrastructure;
@@ -206,6 +207,11 @@ builder.Services.AddTransient(sp =>
 // blob and audit row commit in one transaction.
 builder.Services.AddScoped<EncryptedSourceConfigStore>();
 builder.Services.AddScoped<SourceService>();
+
+// M4T3: action-config CRUD + notifications (scoped, share the request DbContext).
+builder.Services.AddScoped<EncryptedActionConfigStore>();
+builder.Services.AddScoped<ActionConfigService>();
+builder.Services.AddScoped<NotificationService>();
 
 // M3T2 (§11 / SQ-M3-3 / Q-L4): the tool-calling capabilities probe.
 // - ModelOptions binds the section "Model" (env MODEL__ProbeReprobeWindow,
@@ -409,6 +415,8 @@ app.MapAdminUserEndpoints();
 // and the M2-only GET /v1/user/account/kdf the SPA derives X-User-Dek from.
 // Mapped before the catch-all so the literal routes always outrank it.
 app.MapSourcesEndpoints();
+app.MapActionsEndpoints();
+app.MapNotificationsEndpoints();
 app.MapUserAccountEndpoints();
 
 // M3T7 (SQ-M3-6 / SQ-M3-12): the §13.3 /user/models namespace — the reduced
