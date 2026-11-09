@@ -6,12 +6,18 @@ never holds the keys that decrypt your data.
 
 - User-facing overview and operational docs: [`docs/`](docs/README.md)
 - Design source of truth: `plans/01-architecture.md` (local checkout)
-- Current milestone: **M1 — Identity, encryption, and the data model** —
-  `plans/implementation/M1-identity-encryption-and-data-model.md` (local
-  checkout), starting with `plans/implementation/M1T1-solution-scaffolding-and-dev-environment.md`
+- Milestones in order: `plans/03-roadmap.md` (local checkout)
 
-**Status:** M0 (foundation) and M1 (identity, encryption, and the data
-model) are complete.
+**Status:** M0–M2 complete; M3 in review (PR #1).
+
+## Stack
+
+ASP.NET Core (API) + Blazor WebAssembly (SPA) on **.NET 10**, EF Core /
+Npgsql on PostgreSQL, orchestrated with Docker Compose. The .NET SDK
+version is pinned via `global.json`; on hosts without the SDK, every
+`dotnet` command needed by the smoke scripts and CI-equivalent gates runs
+inside the `mcr.microsoft.com/dotnet/sdk:10.0` container (`make build` /
+`make test` still need a host SDK).
 
 ## Quickstart (development)
 
