@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text.Json;
+using EmailAgent.Contracts.ActionHandlers;
 using EmailAgent.Contracts.AgentEngines;
 using EmailAgent.Contracts.MessageSources;
 using EmailAgent.Contracts.Plugins;
@@ -457,12 +458,14 @@ public sealed class PluginLoader : IHostedService
             // actually happened (review INFO): a refused claim of an id that
             // never registered in this cycle must not announce an
             // "unregistered" that did not occur — it stays at debug level.
-            // Both slots are checked and cleaned (M3T1: a refusal poisons the
-            // id whether the claimant registered as a source or as an engine).
+            // Every slot is checked and cleaned (M3T1/M4T1): a refusal
+            // poisons the id regardless of which slot the claimant occupied.
             var wasRegistered = _registry.GetMessageSource(pluginId) is not null
-                || _registry.GetAgentEngine(pluginId) is not null;
+                || _registry.GetAgentEngine(pluginId) is not null
+                || _registry.GetActionHandler(pluginId) is not null;
             _registry.UnregisterMessageSource(pluginId);
             _registry.UnregisterAgentEngine(pluginId);
+            _registry.UnregisterActionHandler(pluginId);
             if (wasRegistered)
             {
                 _logger.LogWarning(
@@ -838,9 +841,13 @@ public sealed class PluginLoader : IHostedService
         }
 
         // One slot per plugin — the slot the declared entry type implements.
-        // CreatePluginInstance only ever hands back an IAgentEngine (M3T1's
-        // openai-compatible DEFAULT) or an IMessageSource (the M2 plugins).
-        if (instance is IAgentEngine agentEngine)
+        // CreatePluginInstance hands back an IActionHandler (M4T1/M4T2),
+        // IAgentEngine (M3T1), or an IMessageSource (M2 plugins).
+        if (instance is IActionHandler actionHandler)
+        {
+            _registry.RegisterActionHandler(manifest.PluginId, actionHandler);
+        }
+        else if (instance is IAgentEngine agentEngine)
         {
             _registry.RegisterAgentEngine(manifest.PluginId, agentEngine);
         }
@@ -887,15 +894,13 @@ public sealed class PluginLoader : IHostedService
     /// </summary>
     /// <remarks>
     /// M3T1 generalized the gate from <see cref="IMessageSource"/> to the
-    /// plugin's slot contract: the declared type must be an instantiable
-    /// <see cref="IMessageSource"/> <b>or</b> <see cref="IAgentEngine"/>
-    /// implementation (the DEFAULT <c>openai-compatible</c> plugin declares an
-    /// engine, which the M2-only gate would have refused). Instantiation tries
-    /// the parameterless constructor first — every M2 plugin has one, so their
-    /// behaviour is unchanged — and falls back to
-    /// <see cref="ActivatorUtilities"/> so an engine can take constructor-injected
-    /// services (a plugin-local <see cref="HttpClient"/> from Program.cs's
-    /// <c>IHttpClientFactory</c> registration).
+    /// plugin's slot contract, and M4T1 adds <see cref="IActionHandler"/>: the
+    /// declared type must be an instantiable <see cref="IMessageSource"/>,
+    /// <see cref="IAgentEngine"/>, or <see cref="IActionHandler"/>
+    /// implementation. Instantiation tries the parameterless constructor first
+    /// — existing plugins keep their behaviour — and falls back to
+    /// <see cref="ActivatorUtilities"/> so an entry type can take
+    /// constructor-injected services.
     /// </remarks>
     private object CreatePluginInstance(Assembly assembly, PluginManifest manifest)
     {
@@ -905,7 +910,8 @@ public sealed class PluginLoader : IHostedService
             pluginTypes = assembly.GetTypes()
                 .Where(t => t is { IsClass: true, IsAbstract: false })
                 .Where(t => typeof(IMessageSource).IsAssignableFrom(t)
-                    || typeof(IAgentEngine).IsAssignableFrom(t))
+                    || typeof(IAgentEngine).IsAssignableFrom(t)
+                    || typeof(IActionHandler).IsAssignableFrom(t))
                 .ToList();
         }
         catch (ReflectionTypeLoadException ex)
@@ -920,7 +926,7 @@ public sealed class PluginLoader : IHostedService
         {
             throw new PluginLoadException(
                 $"plugin {manifest.PluginId}: declared entry type '{manifest.TypeName}' is not an instantiable "
-                + "IMessageSource or IAgentEngine implementation in the assembly ("
+                + "IMessageSource, IAgentEngine, or IActionHandler implementation in the assembly ("
                 + (pluginTypes.Count == 0
                     ? "the assembly declares none"
                     : string.Join(", ", pluginTypes.Select(t => t.FullName)))
@@ -953,14 +959,14 @@ public sealed class PluginLoader : IHostedService
                 $"plugin {manifest.PluginId}: declared entry type '{manifest.TypeName}' could not be instantiated", ex);
         }
 
-        if (instance is IMessageSource or IAgentEngine)
+        if (instance is IMessageSource or IAgentEngine or IActionHandler)
         {
             return instance;
         }
 
         throw new PluginLoadException(
-            $"plugin {manifest.PluginId}: declared entry type '{manifest.TypeName}' is not an IMessageSource "
-            + "or IAgentEngine");
+            $"plugin {manifest.PluginId}: declared entry type '{manifest.TypeName}' is not an IMessageSource, "
+            + "IAgentEngine, or IActionHandler");
     }
 
     /// <summary>Reads the embedded <c>&lt;assembly&gt;.plugin.json</c> resource (DEFAULT plugins ship none on disk).</summary>

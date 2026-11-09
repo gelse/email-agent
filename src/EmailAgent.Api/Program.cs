@@ -13,6 +13,8 @@ using EmailAgent.Core.Options;
 using EmailAgent.Infrastructure;
 using EmailAgent.Infrastructure.Agents;
 using EmailAgent.Infrastructure.Entities;
+using EmailAgent.Infrastructure.Actions;
+using EmailAgent.Infrastructure.Blobs;
 using EmailAgent.Infrastructure.Plugins;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
@@ -162,12 +164,24 @@ builder.Services.AddOptions<PluginOptions>()
         PluginOptions.InvalidKeyMessage)
     .ValidateOnStart();
 
+// M4T1 (Q-O18 / SQ-M4-7): pending-confirmation expiry (default 7 days).
+builder.Services.AddOptions<ActionsOptions>()
+    .Bind(builder.Configuration.GetSection(ActionsOptions.SectionName));
+
 builder.Services.AddSingleton<IPluginRegistry, PluginRegistry>();
 builder.Services.AddSingleton<PluginSignatureVerifier>();
 builder.Services.AddSingleton<PluginManifestValidator>();
 builder.Services.AddSingleton<DefaultTrustAnchor>();
 builder.Services.AddSingleton<PluginLoader>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PluginLoader>());
+
+// M4T1: action-dispatch services (dispatcher + seams + shared user-DEK blob
+// crypto). Handler/config resolution and dispatch are scoped (DbContext);
+// the blob crypto and handler registry are stateless/singleton.
+builder.Services.AddSingleton<IUserBlobCrypto, UserBlobCrypto>();
+builder.Services.AddSingleton<IActionHandlerRegistry, PluginActionHandlerRegistry>();
+builder.Services.AddScoped<IActionConfigProvider, DecryptedActionConfigProvider>();
+builder.Services.AddScoped<IActionDispatcher, ActionDispatcher>();
 
 // M3T1: HTTP transport for engine plugins. The loader instantiates the
 // manifest-declared entry type through ActivatorUtilities, so any
@@ -273,6 +287,7 @@ builder.Services.AddOpenTelemetry()
         // M1T1 acceptance criterion: /metrics must expose process_runtime_*
         // series, which only the runtime instrumentation emits.
         .AddRuntimeInstrumentation()
+        .AddMeter("EmailAgent.Actions")
         .AddPrometheusExporter());
 
 builder.Services.AddHealthChecks()
