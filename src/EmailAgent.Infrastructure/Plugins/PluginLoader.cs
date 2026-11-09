@@ -856,6 +856,13 @@ public sealed class PluginLoader : IHostedService
             _registry.RegisterMessageSource(manifest.PluginId, (IMessageSource)instance);
         }
 
+        // M4T2: a vetted assembly may carry additional IActionHandler
+        // implementations alongside its declared entry type (e.g. the IMAP
+        // connector ships imap-reply/imap-forward next to the imap message
+        // source). Register each under handler.TypeId so the dispatcher and
+        // action-config CRUD can resolve them.
+        RegisterCoLocatedActionHandlers(assembly, manifest, instance.GetType());
+
         lock (_sync)
         {
             _loaded.Add(new LoadedPlugin(manifest, context, fileName));
@@ -882,6 +889,73 @@ public sealed class PluginLoader : IHostedService
             string.Join(", ", manifest.Capabilities));
 
         return true;
+    }
+
+
+    /// <summary>
+    /// M4T2: registers additional <see cref="IActionHandler"/> implementations
+    /// found in the same vetted assembly (e.g. <c>imap-reply</c>/<c>imap-forward</c>
+    /// co-located with the IMAP message source). Each is registered under its
+    /// own <see cref="IActionHandler.TypeId"/>. Instantiation failures are
+    /// logged and skipped (the primary plugin remains loaded).
+    /// </summary>
+    private void RegisterCoLocatedActionHandlers(Assembly assembly, PluginManifest manifest, Type declaredType)
+    {
+        IEnumerable<Type> types;
+        try
+        {
+            types = assembly.GetTypes()
+                .Where(t => t is { IsClass: true, IsAbstract: false }
+                    && t != declaredType
+                    && typeof(IActionHandler).IsAssignableFrom(t));
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not scan co-located action handlers in plugin {PluginId}.", manifest.PluginId);
+            return;
+        }
+
+        foreach (var t in types)
+        {
+            try
+            {
+                var instance = Activator.CreateInstance(t);
+                if (instance is IActionHandler handler)
+                {
+                    _registry.RegisterActionHandler(handler.TypeId, handler);
+                    _logger.LogInformation(
+                        "Registered co-located action handler {TypeId} from plugin {PluginId} ({Type}).",
+                        handler.TypeId, manifest.PluginId, t.FullName);
+                }
+            }
+            catch (MissingMethodException)
+            {
+                try
+                {
+                    var instance = ActivatorUtilities.CreateInstance(_services, t);
+                    if (instance is IActionHandler handler)
+                    {
+                        _registry.RegisterActionHandler(handler.TypeId, handler);
+                        _logger.LogInformation(
+                            "Registered co-located action handler {TypeId} from plugin {PluginId} ({Type}).",
+                            handler.TypeId, manifest.PluginId, t.FullName);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to instantiate co-located action handler {Type} in plugin {PluginId}.",
+                        t.FullName, manifest.PluginId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to register co-located action handler {Type} in plugin {PluginId}.",
+                    t.FullName, manifest.PluginId);
+            }
+        }
     }
 
     /// <summary>

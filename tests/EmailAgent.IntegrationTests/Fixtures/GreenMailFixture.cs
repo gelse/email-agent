@@ -86,6 +86,9 @@ public sealed class GreenMailFixture : IAsyncLifetime
     /// <summary>Host the test process reaches Greenmail on (the Docker gateway from inside a container).</summary>
     public string ImapHost => _container.Hostname;
 
+    /// <summary>M4T2: SMTP host (same container as IMAP — Q-C7).</summary>
+    public string SmtpHost => _container.Hostname;
+
     /// <summary>Published host port of Greenmail's plaintext IMAP endpoint (3143 inside).</summary>
     public ushort ImapPort => _container.GetMappedPublicPort(ImapInternalPort);
 
@@ -129,6 +132,60 @@ public sealed class GreenMailFixture : IAsyncLifetime
         using var response = await RestClient.PostAsync(
             "/api/mail/purge", new StringContent(string.Empty));
         response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// M4T2/T5: counts messages delivered to <paramref name="userEmail"/> via
+    /// Greenmail's REST API (pinned to the 2.0.1 image).
+    /// </summary>
+    public async Task<int> CountMessagesAsync(string userEmail)
+    {
+        var messages = await GetMessagesAsync(userEmail).ConfigureAwait(false);
+        return messages.Count;
+    }
+
+    /// <summary>
+    /// M4T5: lists messages for <paramref name="userEmail"/> (raw JSON array)
+    /// via <c>GET /api/user/{email}/messages</c>.
+    /// </summary>
+    public async Task<IReadOnlyList<JsonElement>> GetMessagesAsync(string userEmail)
+    {
+        using var response = await RestClient.GetAsync(
+            $"/api/user/{Uri.EscapeDataString(userEmail)}/messages").ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            // Fallback: some endpoints key by login rather than full email.
+            var login = userEmail.Contains('@', StringComparison.Ordinal)
+                ? userEmail[..userEmail.IndexOf('@', StringComparison.Ordinal)]
+                : userEmail;
+            using var retry = await RestClient.GetAsync(
+                $"/api/user/{Uri.EscapeDataString(login)}/messages").ConfigureAwait(false);
+            retry.EnsureSuccessStatusCode();
+            var retryJson = await retry.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var retryDoc = JsonDocument.Parse(retryJson);
+            return retryDoc.RootElement.ValueKind == JsonValueKind.Array
+                ? retryDoc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList()
+                : [];
+        }
+
+        var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.ValueKind == JsonValueKind.Array
+            ? doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList()
+            : [];
+    }
+
+    /// <summary>
+    /// M4T5: fetches the raw MIME content for a message id returned by the REST
+    /// API (endpoint shape varies by Greenmail version; best-effort).
+    /// </summary>
+    public async Task<string> GetRawMessageAsync(string messageId)
+    {
+        // Greenmail 2.x: GET /api/mail/{id}
+        using var response = await RestClient.GetAsync(
+            $"/api/mail/{Uri.EscapeDataString(messageId)}").ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
     }
 
     /// <summary>
