@@ -90,7 +90,7 @@ public class SpaBundleSecretTests
         var root = FindRepositoryRoot();
         var config = FindBuildConfig();
 
-        var spaBin = Path.Combine(root, "src", "EmailAgent.Spa", "bin", config, "net8.0");
+        var spaBin = Path.Combine(root, "src", "EmailAgent.Spa", "bin", config, "net10.0");
         var bundleWwwroot = Path.Combine(spaBin, "wwwroot");
         Directory.Exists(bundleWwwroot).Should().BeTrue(
             "the SPA bundle must be built for this check — expected "

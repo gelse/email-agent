@@ -2,7 +2,7 @@
 # M0T4 — multi-stage, non-root build (§17 outline + SQ-M0-2/SQ-M0-3 deviations).
 
 # ---- Stage 1: build the API ----
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
 RUN dotnet publish src/EmailAgent.Api/EmailAgent.Api.csproj \
@@ -10,7 +10,7 @@ RUN dotnet publish src/EmailAgent.Api/EmailAgent.Api.csproj \
         -o /app/publish
 
 # ---- Stage 2: publish the SPA ----
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS spa
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS spa
 WORKDIR /src
 COPY . .
 RUN dotnet publish src/EmailAgent.Spa/EmailAgent.Spa.csproj \
@@ -18,7 +18,7 @@ RUN dotnet publish src/EmailAgent.Spa/EmailAgent.Spa.csproj \
         -o /app/spa
 
 # ---- Stage 3: API runtime (non-root) ----
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS api-runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS api-runtime
 # SQ-M0-3: curl is required for the compose healthcheck (aspnet image ships none).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \

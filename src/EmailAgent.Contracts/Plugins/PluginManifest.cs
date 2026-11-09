@@ -15,7 +15,7 @@ namespace EmailAgent.Contracts.Plugins;
 /// <remarks>
 /// <c>capabilities</c> is typed <see cref="IReadOnlySet{T}"/> per SQ-1;
 /// deserializing that interface is not supported by System.Text.Json on
-/// net8.0, so <see cref="FromJsonElement(JsonElement)"/> parses manually —
+/// net10.0, so <see cref="FromJsonElement(JsonElement)"/> parses manually —
 /// always use these parsers instead of <c>JsonSerializer.Deserialize&lt;PluginManifest&gt;</c>.
 /// </remarks>
 public record PluginManifest(

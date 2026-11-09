@@ -14,9 +14,19 @@
     <!-- M1T8: bUnit for the Blazor WASM pages (SPA test project scope). -->
     <PackageReference Include="bunit" Version="1.40.0" />
     <PackageReference Include="bunit.web" Version="1.40.0" />
+    <!-- M9T2 NU1902 (GHSA-pgww-w46g-26qg / CVE-2026-54570, moderate): bUnit's
+         transitive AngleSharp 1.2.0 is vulnerable; 1.5.0 is the patched
+         release. Direct pin over the transitive floor (bunit stays 1.40.0). -->
+    <PackageReference Include="AngleSharp" Version="1.5.0" />
     <PackageReference Include="FluentAssertions" Version="6.12.2" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.32" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- M9T4 (milestone D3): must match the EF Core 10.0.14 line from M9T2 —
+         an EF InMemory major below the framework throws MissingMethodException
+         (AbstractionsStrings.ArgumentIsEmpty) at test runtime. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.14" />
+    <!-- M9T4 (milestone D3): 18.11.0 is contract-mandated. Verified green with
+         xunit 2.9.3 + runner 2.8.2 under SDK 10 (R3 not triggered); do not
+         downgrade without re-running the full suite. -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

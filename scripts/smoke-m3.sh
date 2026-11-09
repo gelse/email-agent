@@ -257,7 +257,7 @@ docker run --rm \
     -v "$ROOT_DIR:/work" \
     -w /work \
     $NUGET_VOL \
-    mcr.microsoft.com/dotnet/sdk:8.0 \
+    mcr.microsoft.com/dotnet/sdk:10.0 \
     sh -c "$PUBLISH_CMD" \
     > "$ARTIFACT_DIR/publish-openaimock.log" 2>&1 || {
     tail -n 30 "$ARTIFACT_DIR/publish-openaimock.log" >&2
@@ -277,7 +277,7 @@ docker run -d --name "$MOCK_A_NAME" \
     --network "$MOCK_NETWORK" --network-alias "$MOCK_A_ALIAS" \
     -p 127.0.0.1:9090:9090 \
     -v "$ROOT_DIR:/work" -w /work \
-    mcr.microsoft.com/dotnet/sdk:8.0 \
+    mcr.microsoft.com/dotnet/sdk:10.0 \
     dotnet "$MOCK_DLL" --scenario probe-pass --urls http://0.0.0.0:9090 \
     > /dev/null || fail "could not start mock A"
 log "starting mock B (${MOCK_B_ALIAS}:9091, scenario probe-fail)"
@@ -285,7 +285,7 @@ docker run -d --name "$MOCK_B_NAME" \
     --network "$MOCK_NETWORK" --network-alias "$MOCK_B_ALIAS" \
     -p 127.0.0.1:9091:9091 \
     -v "$ROOT_DIR:/work" -w /work \
-    mcr.microsoft.com/dotnet/sdk:8.0 \
+    mcr.microsoft.com/dotnet/sdk:10.0 \
     dotnet "$MOCK_DLL" --scenario probe-fail --urls http://0.0.0.0:9091 \
     > /dev/null || fail "could not start mock B"
 log "polling the host-side control endpoints (readiness)"
@@ -302,7 +302,7 @@ log "both mocks ready (host control + api-side alias path verified)"
 
 # --- step 5: apply migrations (API does not auto-migrate) --------------------
 STEP=5
-# The api container runs the SDK-less aspnet:8.0 runtime, so `dotnet ef`
+# The api container runs the SDK-less aspnet:10.0 runtime, so `dotnet ef`
 # runs in a throwaway SDK container on the compose network (smoke-m2.sh
 # step 4 recipe); the design-time factory reads ConnectionStrings__Postgres.
 log "applying EF migrations (SDK container on the compose network)"
@@ -318,9 +318,9 @@ docker run --rm \
     -w /work \
     $NUGET_VOL \
     -e "ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=emailagent;Username=emailagent;Password=${PG_PASSWORD}" \
-    mcr.microsoft.com/dotnet/sdk:8.0 \
+    mcr.microsoft.com/dotnet/sdk:10.0 \
     sh -c '
-        dotnet tool install --global dotnet-ef --version 8.0.* >/dev/null 2>&1 || true
+        dotnet tool install --global dotnet-ef --version 10.0.* >/dev/null 2>&1 || true
         export PATH="$PATH:/root/.dotnet/tools"
         dotnet ef database update --project src/EmailAgent.Infrastructure
     ' > "$ARTIFACT_DIR/migrate.log" 2>&1 || {
@@ -617,7 +617,7 @@ docker run --rm \
     $NUGET_RO \
     -e ConnectionStrings__Postgres="$CONN" \
     -e AUDIT__HmacKey="$AUDIT_KEY" \
-    mcr.microsoft.com/dotnet/sdk:8.0 \
+    mcr.microsoft.com/dotnet/sdk:10.0 \
     dotnet run --project tools/AuditVerify \
     > "$ARTIFACT_DIR/audit-verify.log" 2>&1
 AV_RC=$?

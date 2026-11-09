@@ -46,9 +46,9 @@ public sealed class DefaultTrustAnchor
     public IReadOnlyList<(string PluginId, string Version, string AssemblyFileName, byte[] Sha256)> Entries { get; }
         = new List<(string, string, string, byte[])>
         {
-            ("imap", "1.0.0", "EmailAgent.Connectors.Imap", Convert.FromHexString("5f15502ff862d6590eb5f2e01b7d623ba2218dcf85bdb00bc5a62a649f46aaa2")),
-            ("openai-compatible", "1.0.0", "EmailAgent.Connectors.OpenAI", Convert.FromHexString("baaa07cc7e7a8fa0151ff4bfdb78373c00dd9d2461c39352ccee7722cb93a252")),
-            ("telegram-send", "1.0.0", "EmailAgent.Connectors.Telegram", Convert.FromHexString("508192b4897b6dfc98cc7257891c652602c6412fb490f1123606d64ca1fcd3a8")),
+            ("imap", "1.0.0", "EmailAgent.Connectors.Imap", Convert.FromHexString("81ce1a92e160e2c179e75f95ad323c41d97bf62e75c0ebab692f0e52eb9eb6f7")),
+            ("openai-compatible", "1.0.0", "EmailAgent.Connectors.OpenAI", Convert.FromHexString("f32f691c860f2d8859c118990bba0a3745c37dc5e95bda8f93e2a151196d0753")),
+            ("telegram-send", "1.0.0", "EmailAgent.Connectors.Telegram", Convert.FromHexString("6a148b67271809f70967836e2e1c59bd8013a31cdd307e91f1a5d4f132633426")),
         };
 
     /// <summary>
