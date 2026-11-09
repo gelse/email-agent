@@ -199,7 +199,7 @@ log "greenmail readiness -> 200 (strict auth: no -Dgreenmail.auth.disabled)"
 
 # --- step 4: apply migrations (API does not auto-migrate) --------------------
 STEP=4
-# The api container runs the SDK-less aspnet:8.0 runtime, so `dotnet ef`
+# The api container runs the SDK-less aspnet:10.0 runtime, so `dotnet ef`
 # runs in a throwaway SDK container on the compose network (smoke-m1.sh
 # pattern); the design-time factory reads ConnectionStrings__Postgres.
 log "applying EF migrations (SDK container on the compose network)"
@@ -215,9 +215,9 @@ docker run --rm \
     -w /work \
     $NUGET_VOL \
     -e "ConnectionStrings__Postgres=Host=postgres;Port=5432;Database=emailagent;Username=emailagent;Password=${PG_PASSWORD}" \
-    mcr.microsoft.com/dotnet/sdk:8.0 \
+    mcr.microsoft.com/dotnet/sdk:10.0 \
     sh -c '
-        dotnet tool install --global dotnet-ef --version 8.0.* >/dev/null 2>&1 || true
+        dotnet tool install --global dotnet-ef --version 10.0.* >/dev/null 2>&1 || true
         export PATH="$PATH:/root/.dotnet/tools"
         dotnet ef database update --project src/EmailAgent.Infrastructure
     ' > "$ARTIFACT_DIR/migrate.log" 2>&1 || {
@@ -657,7 +657,7 @@ docker run --rm \
     $NUGET_RO \
     -e ConnectionStrings__Postgres="$CONN" \
     -e AUDIT__HmacKey="$AUDIT_KEY" \
-    mcr.microsoft.com/dotnet/sdk:8.0 \
+    mcr.microsoft.com/dotnet/sdk:10.0 \
     dotnet run --project tools/AuditVerify \
     > "$ARTIFACT_DIR/audit-verify.log" 2>&1
 AV_RC=$?

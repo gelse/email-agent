@@ -15,9 +15,9 @@
          - GenerateAssemblyConfigurationAttribute=false: otherwise the PE
            carries AssemblyConfiguration("Debug"/"Release");
          - IncludeSourceRevisionInInformationalVersion=false: otherwise the
-           .NET 8 SDK's built-in SourceLink appends "+<gitsha>[_dirty]" —
-           a value that differs between a dirty local tree and CI's clean
-           checkout;
+           SDK's built-in SourceLink, where present, appends
+           "+<gitsha>[_dirty]" — a value that differs between a dirty local
+           tree and CI's clean checkout;
          - DebugType=none: a portable PDB makes the PE depend on the PDB's
            identity and the absolute document/build paths, so the CodeView
            debug directory would differ per configuration and per checkout

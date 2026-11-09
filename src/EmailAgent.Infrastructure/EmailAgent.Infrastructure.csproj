@@ -8,29 +8,31 @@
 
   <ItemGroup>
     <PackageReference Include="Isopoh.Cryptography.Argon2" Version="2.0.0" />
-    <PackageReference Include="Microsoft.AspNetCore.Cryptography.KeyDerivation" Version="8.0.32" />
-    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="8.0.32" />
+    <PackageReference Include="Microsoft.AspNetCore.Cryptography.KeyDerivation" Version="10.0.14" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.14" />
     <!-- Design-time assets for `dotnet ef` (M1T2 task step 10 — the
          EmailAgentDbContextFactory implements IDesignTimeDbContextFactory).
          No IncludeAssets restriction: unlike the startup-project pattern,
          this project compiles against the design-time interfaces. -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.32">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.32" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.14" />
     <!-- M1T3: optionsBuilder.Bind(configuration.GetSection("System")) for
          EncryptionOptions (SYSTEM__KeyEncryptionKey, §16 / Q-E7). -->
-    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.14" />
     <!-- M2T3: PluginLoader implements IHostedService (hosted-service
          abstractions only — this project must not reference the full
          Microsoft.Extensions.Hosting). -->
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.14" />
     <!-- ServiceCollectionExtensions resolves ConnectionStrings:Postgres via
          GetConnectionString; not otherwise in this project's graph. -->
-    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="8.0.0" />
-    <!-- 8.0.11 requires Npgsql >= 8.0.6, which unifies with EmailAgent.Api's
-         direct Npgsql 8.0.6 pin (M0) across every project graph. -->
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.14" />
+    <!-- 10.0.3 requires Microsoft.EntityFrameworkCore(.Relational)
+         [10.0.4, 11.0.0) (unified at 10.0.14 across every project graph) and
+         Npgsql >= 10.0.3 — which resolves to 10.0.3 today, matching
+         EmailAgent.Api's direct Npgsql 10.0.3 pin. -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
   </ItemGroup>
 
   <ItemGroup>

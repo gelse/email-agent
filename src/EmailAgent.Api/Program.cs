@@ -213,7 +213,7 @@ var app = builder.Build();
 //   https://localhost:8443 / the testing domain).
 //   X-Forwarded-For    → Connection.RemoteIpAddress becomes the real client
 //   IP (rate-limit partitions + audit rows) instead of the proxy hop.
-// KnownProxies/KnownNetworks are cleared: every peer that can reach the api
+// KnownProxies/KnownIPNetworks are cleared: every peer that can reach the api
 // process IS a trusted edge hop by construction — the api service publishes
 // no host port in dev (M1T8 same-origin topology) and sits behind traefik in
 // testing. What such a hop forwards is trusted verbatim, so the edge contract
@@ -228,7 +228,7 @@ var forwardedHeaders = new ForwardedHeadersOptions
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
 };
 forwardedHeaders.KnownProxies.Clear();
-forwardedHeaders.KnownNetworks.Clear();
+forwardedHeaders.KnownIPNetworks.Clear();
 app.UseForwardedHeaders(forwardedHeaders);
 
 app.UseSerilogRequestLogging();

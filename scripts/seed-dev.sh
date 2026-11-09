@@ -19,7 +19,7 @@
 #     must_complete_first_login and the forced first-login change-password
 #     path applies (M1T1 step 9; Q-A4).
 #   * password_hash is an Identity v3 hash (PBKDF2-HMAC-SHA512, 100k
-#     iterations, 16-byte salt, 32-byte subkey — the shipped aspnetcore 8.0.x
+#     iterations, 16-byte salt, 32-byte subkey — the shipped aspnetcore 10.0.x
 #     PasswordHasher defaults M1T4 will verify against), computed here with
 #     openssl and assembled in SQL.
 #   * The Identity role rows (`Admin` / `User`) and the admin's role
@@ -68,7 +68,7 @@ case "$ADMIN_PASSWORD" in
 esac
 
 # Identity v3 hash, byte-identical to what the shipped Microsoft.AspNetCore
-# Identity PasswordHasher produces (aspnetcore 8.0.x `HashPasswordV3`):
+# Identity PasswordHasher produces (aspnetcore 10.0.x `HashPasswordV3`):
 #   0x01 | uint32 BE prf (2 = HMAC-SHA512 — the shipped V3 default) | uint32 BE
 #   iteration count (100000) | uint32 BE salt length (16) | salt (16 bytes)
 #   | subkey (32 bytes).

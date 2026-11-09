@@ -85,7 +85,7 @@ jobs:
           grep -q 'OpenTelemetry.Extensions.Hosting' artifacts/THIRD_PARTY_NOTICES.md
           # Pin the resolved license column (not just the package name) so a
           # regression in license extraction cannot pass silently.
-          grep -q '| Npgsql | 8.0.6 | PostgreSQL |' artifacts/THIRD_PARTY_NOTICES.md
+          grep -q '| Npgsql | 10.0.3 | PostgreSQL |' artifacts/THIRD_PARTY_NOTICES.md
           # Determinism: a fresh regeneration must be byte-identical.
           cp artifacts/THIRD_PARTY_NOTICES.md /tmp/notices.first
           scripts/generate-notices.sh /tmp/notices.second
