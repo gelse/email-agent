@@ -1,0 +1,44 @@
+@using EmailAgent.Spa.Actions
+@inject ActionsClient ActionsApi
+
+<div class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Delete action">
+        <h2 id="delete-action-title">Delete action</h2>
+
+        @if (_error is not null)
+        {
+            <div class="error-box" id="delete-action-error" role="alert">@_error</div>
+        }
+
+        <p>Delete the action <strong>@Action.DisplayName</strong>? This cannot be undone.</p>
+
+        <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="delete-action-cancel" disabled="@_busy" @onclick="OnCancel">Cancel</button>
+            <button type="button" class="btn-primary" id="delete-action-confirm" disabled="@_busy" @onclick="ConfirmAsync">
+                @(_busy ? "Deleting…" : "Delete")
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ActionConfigDto Action { get; set; } = default!;
+    [Parameter, EditorRequired] public EventCallback OnCancel { get; set; }
+    [Parameter, EditorRequired] public EventCallback OnDeleted { get; set; }
+
+    private bool _busy;
+    private string? _error;
+
+    private async Task ConfirmAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            await ActionsApi.DeleteAsync(Action.Id);
+            await OnDeleted.InvokeAsync();
+        }
+        catch (ActionsApiException ex) { _error = ex.Message; }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+        finally { _busy = false; }
+    }
+}

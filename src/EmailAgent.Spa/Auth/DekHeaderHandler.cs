@@ -62,6 +62,9 @@ public sealed class DekHeaderHandler : DelegatingHandler
         }
 
         return path.Equals("/v1/user/sources", StringComparison.Ordinal)
-            || path.StartsWith("/v1/user/sources/", StringComparison.Ordinal);
+            || path.StartsWith("/v1/user/sources/", StringComparison.Ordinal)
+            // M4T3/T4: action-config read/write endpoints (list decrypts; CRUD uses DEK).
+            || path.Equals("/v1/user/actions", StringComparison.Ordinal)
+            || path.StartsWith("/v1/user/actions/", StringComparison.Ordinal);
     }
 }
