@@ -360,7 +360,7 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
         JsonElement config,
         SourceCheckpoint? checkpoint = null)
     {
-        var messages = new List<RemoteMessage>();
+        List<RemoteMessage> messages = [];
         await foreach (var message in source.ListNewMessagesAsync(
             config, checkpoint ?? SourceCheckpoint.Empty, CancellationToken.None))
         {
@@ -380,12 +380,8 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     /// Yields a client whose IMAP conversation is written to <paramref name="log"/> —
     /// the integration-suite stand-in for the unmockable <c>ImapClient</c>.
     /// </summary>
-    private sealed class ProtocolLoggingFactory : IImapClientFactory
+    private sealed class ProtocolLoggingFactory(Stream log) : IImapClientFactory
     {
-        private readonly Stream _log;
-
-        public ProtocolLoggingFactory(Stream log) => _log = log;
-
-        public ImapClient Create() => new(new ProtocolLogger(_log, leaveOpen: true));
+        public ImapClient Create() => new(new ProtocolLogger(log, leaveOpen: true));
     }
 }

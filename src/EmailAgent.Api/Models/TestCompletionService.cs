@@ -202,7 +202,7 @@ internal sealed class TestCompletionService(
                 EngineConfigJson = configJson,
             });
 
-        var events = new List<AgentEvent>();
+        List<AgentEvent> events = [];
         try
         {
             // The M2T1 interface method only (AGENTS.md hard constraint #8):

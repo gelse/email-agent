@@ -39,5 +39,5 @@ public class ModelCatalogEntry
 
     public User CreatedByUser { get; set; } = null!;
 
-    public ICollection<AgentConfig> AgentConfigs { get; set; } = new List<AgentConfig>();
+    public ICollection<AgentConfig> AgentConfigs { get; set; } = [];
 }

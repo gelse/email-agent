@@ -130,7 +130,7 @@ public class OpenAICompatibleAgentEngineTests : IClassFixture<OpenAIMockFixture>
     /// <summary>Drains an event stream so async-iterator exceptions reach the assertion.</summary>
     private static async Task<List<AgentEvent>> DrainAsync(IAsyncEnumerable<AgentEvent> source)
     {
-        var events = new List<AgentEvent>();
+        List<AgentEvent> events = [];
         await foreach (AgentEvent evt in source)
         {
             events.Add(evt);

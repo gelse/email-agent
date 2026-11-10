@@ -506,7 +506,7 @@ internal static class SchemaAssertions
             command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         }
 
-        var results = new List<T>();
+        List<T> results = [];
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {

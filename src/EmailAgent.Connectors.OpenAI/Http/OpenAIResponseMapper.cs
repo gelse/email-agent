@@ -68,7 +68,7 @@ public static class OpenAIResponseMapper
 
             ThrowWhenProviderError(root, data);
 
-            var events = new List<AgentEvent>();
+            List<AgentEvent> events = [];
             if (!root.TryGetProperty("choices", out var choices)
                 || choices.ValueKind != JsonValueKind.Array
                 || choices.GetArrayLength() == 0)
@@ -167,7 +167,7 @@ public static class OpenAIResponseMapper
             throw new EngineCallException(200, raw, "response body has no choices[0].message object");
         }
 
-        var events = new List<AgentEvent>();
+        List<AgentEvent> events = [];
 
         if (message.TryGetProperty("tool_calls", out var toolCalls)
             && toolCalls.ValueKind == JsonValueKind.Array)

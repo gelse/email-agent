@@ -53,7 +53,7 @@ public sealed class UserModelsClient
         var body = await response.Content
             .ReadFromJsonAsync<UserModelListResponse>()
             .ConfigureAwait(false);
-        return body?.Items ?? new List<UserModelDto>();
+        return body?.Items ?? [];
     }
 }
 

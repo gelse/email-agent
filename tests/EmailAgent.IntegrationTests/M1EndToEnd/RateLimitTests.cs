@@ -50,7 +50,7 @@ public class RateLimitTests
         var email = $"m1t9-ratelimit-{Guid.NewGuid():N}@example.test";
         await AccountTestHost.SeedUserAsync(factory, email);
 
-        var statuses = new List<HttpStatusCode>();
+        List<HttpStatusCode> statuses = [];
         for (var i = 0; i < RateLimitPolicies.LoginPerMinute; i++)
         {
             var attempt = await AccountTestHost.PostLoginAsync(

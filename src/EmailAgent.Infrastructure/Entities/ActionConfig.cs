@@ -31,5 +31,5 @@ public class ActionConfig
 
     public EncryptedBlob ConfigBlob { get; set; } = null!;
 
-    public ICollection<PendingAction> PendingActions { get; set; } = new List<PendingAction>();
+    public ICollection<PendingAction> PendingActions { get; set; } = [];
 }

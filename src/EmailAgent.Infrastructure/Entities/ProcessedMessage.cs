@@ -51,5 +51,5 @@ public class ProcessedMessage
 
     public EncryptedBlob? BodyBlob { get; set; }
 
-    public ICollection<PendingAction> PendingActions { get; set; } = new List<PendingAction>();
+    public ICollection<PendingAction> PendingActions { get; set; } = [];
 }

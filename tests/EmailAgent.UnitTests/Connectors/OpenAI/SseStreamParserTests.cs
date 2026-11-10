@@ -111,7 +111,7 @@ public class SseStreamParserTests
 
     private static async Task<List<SseFrame>> ParseAsync(Stream stream, CancellationToken ct)
     {
-        var frames = new List<SseFrame>();
+        List<SseFrame> frames = [];
         await foreach (SseFrame frame in SseStreamParser.ParseAsync(stream, ct))
         {
             frames.Add(frame);

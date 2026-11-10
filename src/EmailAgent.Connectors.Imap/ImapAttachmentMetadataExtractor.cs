@@ -26,7 +26,7 @@ internal static class ImapAttachmentMetadataExtractor
             return Array.Empty<AttachmentMetadata>();
         }
 
-        var result = new List<AttachmentMetadata>();
+        List<AttachmentMetadata> result = [];
 
         if (bodyStructure is BodyPartMultipart multipart)
         {

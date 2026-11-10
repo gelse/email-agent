@@ -377,7 +377,7 @@ public sealed class SourceService(
         ValidateConfig(plugin, config);
 
         var checkpoint = ParseCheckpoint(source.CheckpointJson);
-        var messages = new List<RemoteMessage>();
+        List<RemoteMessage> messages = [];
         await foreach (var message in plugin.ListNewMessagesAsync(config, checkpoint, ct))
         {
             messages.Add(message);

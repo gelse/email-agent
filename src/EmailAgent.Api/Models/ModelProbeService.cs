@@ -118,8 +118,8 @@ internal sealed class ModelProbeService(
         // is a JsonElement tied to its JsonDocument (the AgentEvent lifetime
         // contract), so the raw text is read while the event is still live
         // instead of relying on the engine having cloned the element.
-        var toolCalls = new List<(string Name, string ArgumentsJson)>();
-        var responseTextChunks = new List<string>();
+        List<(string Name, string ArgumentsJson)> toolCalls = [];
+        List<string> responseTextChunks = [];
         var engine = engineFactory(); // IAgentEngine is not IAsyncDisposable — plain local.
 
         // The canonical probe call (SQ-M3-3) goes through the concrete engine's

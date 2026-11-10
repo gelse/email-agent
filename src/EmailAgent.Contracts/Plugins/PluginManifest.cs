@@ -113,7 +113,7 @@ public record PluginManifest(
             if (allowlistEl.ValueKind != JsonValueKind.Array)
                 throw new JsonException("plugin manifest field 'http_allowlist' must be an array");
 
-            var entries = new List<string>();
+            List<string> entries = [];
             foreach (var entry in allowlistEl.EnumerateArray())
             {
                 if (entry.ValueKind != JsonValueKind.String)

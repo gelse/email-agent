@@ -48,7 +48,7 @@ try
 
     await using var reader = await command.ExecuteReaderAsync();
 
-    var rows = new List<(AuditRowPayload Row, byte[] Hmac)>();
+    List<(AuditRowPayload Row, byte[] Hmac)> rows = [];
     while (await reader.ReadAsync())
     {
         var actorUserId = reader.IsDBNull(1) ? default(Guid?) : reader.GetGuid(1);

@@ -326,7 +326,7 @@ public class AdminUserEndpointsTests
 
         var seeded = await AdminTestHost.SeedManyAsync(factory, 30, "m1t7-cursor-walk");
 
-        var observed = new List<(DateTimeOffset CreatedAt, Guid Id)>();
+        List<(DateTimeOffset CreatedAt, Guid Id)> observed = [];
         string? cursor = null;
         var pages = 0;
 

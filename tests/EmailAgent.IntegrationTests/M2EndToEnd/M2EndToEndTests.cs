@@ -159,7 +159,7 @@ public sealed class M2EndToEndTests : IClassFixture<GreenMailFixture>
 
         // Round-trip every body blob under the caller's DEK: the plaintext the
         // connector fetched is what comes back, and it was never stored in clear.
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         foreach (var row in rows)
         {
             // UnwrapConfigAsync is the generic user-DEK unwrap helper: it reads

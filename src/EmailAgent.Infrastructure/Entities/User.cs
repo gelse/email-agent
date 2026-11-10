@@ -41,19 +41,19 @@ public class User : IdentityUser<Guid>
 
     public DateTimeOffset? LastLoginAt { get; set; }
 
-    public ICollection<OneTimePassword> OneTimePasswords { get; set; } = new List<OneTimePassword>();
+    public ICollection<OneTimePassword> OneTimePasswords { get; set; } = [];
 
-    public ICollection<ModelCatalogEntry> CreatedModelCatalogEntries { get; set; } = new List<ModelCatalogEntry>();
+    public ICollection<ModelCatalogEntry> CreatedModelCatalogEntries { get; set; } = [];
 
-    public ICollection<MessageSource> MessageSources { get; set; } = new List<MessageSource>();
+    public ICollection<MessageSource> MessageSources { get; set; } = [];
 
-    public ICollection<AgentConfig> AgentConfigs { get; set; } = new List<AgentConfig>();
+    public ICollection<AgentConfig> AgentConfigs { get; set; } = [];
 
-    public ICollection<ActionConfig> ActionConfigs { get; set; } = new List<ActionConfig>();
+    public ICollection<ActionConfig> ActionConfigs { get; set; } = [];
 
-    public ICollection<UserNotification> UserNotifications { get; set; } = new List<UserNotification>();
+    public ICollection<UserNotification> UserNotifications { get; set; } = [];
 
-    public ICollection<AuditLog> AuditLogEntries { get; set; } = new List<AuditLog>();
+    public ICollection<AuditLog> AuditLogEntries { get; set; } = [];
 
-    public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
+    public ICollection<RefreshToken> RefreshTokens { get; set; } = [];
 }

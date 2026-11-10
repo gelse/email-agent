@@ -104,7 +104,7 @@ public class SpaBundleSecretTests
         var files = EnumerateScanSet(bundleWwwroot, spaBin, sourceWwwroot, sourceRoot).ToList();
         files.Should().NotBeEmpty("the scan must actually see the bundle");
 
-        var findings = new List<string>();
+        List<string> findings = [];
         foreach (var file in files)
         {
             foreach (var pattern in ConfigurationPatterns.Concat(TestKeyLiterals).Concat(CredentialLiterals))

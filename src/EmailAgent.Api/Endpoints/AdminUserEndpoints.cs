@@ -509,7 +509,7 @@ public static class AdminUserEndpoints
     /// <summary><c>metadata_json</c> for <c>admin_list_users</c> — the raw query parameters.</summary>
     private static string QueryParametersMetadata(HttpContext ctx)
     {
-        var parameters = new Dictionary<string, string>();
+        Dictionary<string, string> parameters = [];
         foreach (var (key, values) in ctx.Request.Query)
         {
             parameters[key] = values.ToString();

@@ -433,14 +433,14 @@ public class SourcesEndpointsTests
         await using var factory = host.Factory;
         using var client = host.Client;
 
-        var all = new List<Guid>();
+        List<Guid> all = [];
         for (var i = 0; i < 5; i++)
         {
             all.Add(SourcesTestHost.IdOf(
                 await SourcesTestHost.CreateSourceAsync(host, $"paged source {i}")));
         }
 
-        var seen = new List<Guid>();
+        List<Guid> seen = [];
         string? cursor = null;
         var pages = 0;
 

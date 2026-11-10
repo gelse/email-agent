@@ -42,7 +42,7 @@ public static class SseStreamParser
             stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
 
         string? eventField = null;
-        var dataLines = new List<string>();
+        List<string> dataLines = [];
 
         while (true)
         {

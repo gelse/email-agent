@@ -226,7 +226,7 @@ public sealed class OpenAICompatibleAgentEngine : IAgentEngine
                 // yet the per-call deadline (or a transport timeout) can
                 // surface from any body read and must always be reported as
                 // EngineCallException(408) rather than as a cancellation.
-                var pending = new List<AgentEvent>();
+                List<AgentEvent> pending = [];
                 var ended = false;
                 try
                 {
