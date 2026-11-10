@@ -141,7 +141,7 @@
     private string? _testError;
     private bool _loading;
     private bool _busy;
-    private bool _testing;
+
 
     /// <summary>
     /// M2T6 review fix: the pre-filled source vanished (deleted in another
@@ -150,11 +150,7 @@
     /// </summary>
     private bool _gone;
 
-    private bool Testing
-    {
-        get => _testing;
-        set => _testing = value;
-    }
+    private bool Testing { get; set; }
 
     /// <summary>
     /// Edit mode only: GET /v1/user/sources/{id} pre-fills every field. The
@@ -220,7 +216,7 @@
         }
 
         _busy = true;
-        _testing = true;
+        Testing = true;
         try
         {
             var outcome = await SourcesApi.TestConnectionAsync(new TestConnectionRequest
@@ -250,7 +246,7 @@
         finally
         {
             _busy = false;
-            _testing = false;
+            Testing = false;
         }
     }
 
