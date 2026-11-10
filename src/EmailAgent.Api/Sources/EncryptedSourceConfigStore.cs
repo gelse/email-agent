@@ -28,22 +28,13 @@ namespace EmailAgent.Api.Sources;
 /// row and config blob committed or rolled back together — hold.
 /// </para>
 /// </remarks>
-public sealed class EncryptedSourceConfigStore
+public sealed class EncryptedSourceConfigStore(EmailAgentDbContext db, IEncryptionService encryption)
 {
     /// <summary><c>encrypted_blobs.purpose</c> of a connector configuration.</summary>
     public const string SourceConfigPurpose = "message_source_config";
 
     /// <summary><c>encrypted_blobs.purpose</c> of a fetched message body (Q-LP1).</summary>
     public const string MessageBodyPurpose = "message_body";
-
-    private readonly EmailAgentDbContext _db;
-    private readonly IEncryptionService _encryption;
-
-    public EncryptedSourceConfigStore(EmailAgentDbContext db, IEncryptionService encryption)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _encryption = encryption ?? throw new ArgumentNullException(nameof(encryption));
-    }
 
     /// <summary>
     /// Encrypts <paramref name="config"/> under <paramref name="dek"/> and
@@ -56,7 +47,7 @@ public sealed class EncryptedSourceConfigStore
         var plaintext = Encoding.UTF8.GetBytes(config.GetRawText());
         try
         {
-            var wrapped = _encryption.WrapWithUserDek(userId, dek, plaintext, ct);
+            var wrapped = encryption.WrapWithUserDek(userId, dek, plaintext, ct);
             return await AddBlobAsync(
                 userId, SourceConfigPurpose, wrapped.Ciphertext, wrapped.Nonce, ct);
         }
@@ -77,7 +68,7 @@ public sealed class EncryptedSourceConfigStore
     {
         ArgumentNullException.ThrowIfNull(body);
 
-        var wrapped = _encryption.WrapWithUserDek(userId, dek, body, ct);
+        var wrapped = encryption.WrapWithUserDek(userId, dek, body, ct);
         return await AddBlobAsync(userId, MessageBodyPurpose, wrapped.Ciphertext, wrapped.Nonce, ct);
     }
 
@@ -90,7 +81,7 @@ public sealed class EncryptedSourceConfigStore
     public async Task<JsonElement> ReadAsync(
         Guid userId, byte[] dek, Guid blobId, CancellationToken ct)
     {
-        var blob = await _db.EncryptedBlobs.AsNoTracking()
+        var blob = await db.EncryptedBlobs.AsNoTracking()
             .FirstOrDefaultAsync(b => b.Id == blobId, ct)
             ?? throw new InternalBlobMissingException(blobId, "the row does not exist");
 
@@ -108,7 +99,7 @@ public sealed class EncryptedSourceConfigStore
         byte[] plaintext;
         try
         {
-            plaintext = _encryption.UnwrapWithUserDek(
+            plaintext = encryption.UnwrapWithUserDek(
                 userId, dek, blob.Ciphertext, blob.Nonce, ct);
         }
         catch (CryptographicException ex)
@@ -137,7 +128,7 @@ public sealed class EncryptedSourceConfigStore
     /// lost a race). Runs in the caller's transaction.
     /// </summary>
     public Task DeleteAsync(Guid blobId, CancellationToken ct)
-        => _db.EncryptedBlobs
+        => db.EncryptedBlobs
             .Where(b => b.Id == blobId)
             .ExecuteDeleteAsync(ct);
 
@@ -158,8 +149,8 @@ public sealed class EncryptedSourceConfigStore
             CreatedAt = DateTimeOffset.UtcNow,
         };
 
-        _db.EncryptedBlobs.Add(blob);
-        await _db.SaveChangesAsync(ct);
+        db.EncryptedBlobs.Add(blob);
+        await db.SaveChangesAsync(ct);
         return blob.Id;
     }
 }
