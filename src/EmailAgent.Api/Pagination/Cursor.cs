@@ -109,10 +109,4 @@ public static class Cursor
 /// Raised by <see cref="Cursor.Decode"/> for any strict-parse failure; the
 /// admin endpoints map it to a §13.12 400 <c>/errors/validation</c> document.
 /// </summary>
-public sealed class InvalidCursorException : Exception
-{
-    public InvalidCursorException(string message)
-        : base(message)
-    {
-    }
-}
+public sealed class InvalidCursorException(string message) : Exception(message);

@@ -6,7 +6,7 @@ namespace EmailAgent.Infrastructure.Plugins;
 /// audit row's <c>metadata_json</c> (acceptance criterion 2: reason
 /// <c>signature_mismatch</c>).
 /// </summary>
-public sealed class PluginSignatureException : Exception
+public sealed class PluginSignatureException(string reason, string message) : Exception(message)
 {
     /// <summary>Signature field absent from <c>plugin.json</c>.</summary>
     public const string Unsigned = "unsigned";
@@ -18,11 +18,5 @@ public sealed class PluginSignatureException : Exception
     public const string SignatureMismatch = "signature_mismatch";
 
     /// <summary>Which signature rule failed; one of the constants on this type.</summary>
-    public string Reason { get; }
-
-    public PluginSignatureException(string reason, string message)
-        : base(message)
-    {
-        Reason = reason;
-    }
+    public string Reason { get; } = reason;
 }

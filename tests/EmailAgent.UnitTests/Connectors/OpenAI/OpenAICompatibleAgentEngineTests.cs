@@ -352,12 +352,8 @@ public class OpenAICompatibleAgentEngineTests
     /// request (method, Authorization header, body) so the streaming tests can
     /// assert the wire shape too — no socket ever opens (AGENTS.md #5).
     /// </summary>
-    private sealed class SseStubHandler : HttpMessageHandler
+    private sealed class SseStubHandler(string sseBody) : HttpMessageHandler
     {
-        private readonly string _sseBody;
-
-        public SseStubHandler(string sseBody) => _sseBody = sseBody;
-
         /// <summary>The single request this stub answered, or <see langword="null"/> before the first call.</summary>
         public StubRequest? Request { get; private set; }
 
@@ -373,7 +369,7 @@ public class OpenAICompatibleAgentEngineTests
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(_sseBody, Encoding.UTF8, "text/event-stream"),
+                Content = new StringContent(sseBody, Encoding.UTF8, "text/event-stream"),
             };
         }
     }
@@ -417,11 +413,9 @@ public class OpenAICompatibleAgentEngineTests
     /// <summary>
     /// Serves the payload once, then throws if asked for more bytes.
     /// </summary>
-    private sealed class SentinelThenFailContent : HttpContent
+    private sealed class SentinelThenFailContent(string payload) : HttpContent
     {
-        private readonly byte[] _payload;
-
-        public SentinelThenFailContent(string payload) => _payload = Encoding.UTF8.GetBytes(payload);
+        private readonly byte[] _payload = Encoding.UTF8.GetBytes(payload);
 
         protected override Task<Stream> CreateContentReadStreamAsync() =>
             Task.FromResult<Stream>(new SentinelThenFailStream(new MemoryStream(_payload)));
@@ -437,29 +431,25 @@ public class OpenAICompatibleAgentEngineTests
     }
 
     /// <summary>Reads from the inner stream until it ends, then throws instead of returning 0.</summary>
-    private sealed class SentinelThenFailStream : Stream
+    private sealed class SentinelThenFailStream(Stream inner) : Stream
     {
-        private readonly Stream _inner;
-
-        public SentinelThenFailStream(Stream inner) => _inner = inner;
-
         public override bool CanRead => true;
 
         public override bool CanSeek => false;
 
         public override bool CanWrite => false;
 
-        public override long Length => _inner.Length;
+        public override long Length => inner.Length;
 
         public override long Position
         {
-            get => _inner.Position;
+            get => inner.Position;
             set => throw new NotSupportedException();
         }
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
-            var read = await _inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            var read = await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {
                 throw new IOException(
@@ -490,7 +480,7 @@ public class OpenAICompatibleAgentEngineTests
         {
             if (disposing)
             {
-                _inner.Dispose();
+                inner.Dispose();
             }
 
             base.Dispose(disposing);

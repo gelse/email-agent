@@ -27,18 +27,11 @@ namespace EmailAgent.Spa.Models;
 /// document so the dialogs can render <c>errors[]</c> inline next to each
 /// field and the probe-failed <c>detail</c> in the red banner (task step 3).
 /// </summary>
-public sealed class ModelsApiException : Exception
+public sealed class ModelsApiException(HttpStatusCode status, ApiProblem? problem, string message) : Exception(message)
 {
-    public ModelsApiException(HttpStatusCode status, ApiProblem? problem, string message)
-        : base(message)
-    {
-        Status = status;
-        Problem = problem;
-    }
+    public HttpStatusCode Status { get; } = status;
 
-    public HttpStatusCode Status { get; }
-
-    public ApiProblem? Problem { get; }
+    public ApiProblem? Problem { get; } = problem;
 
     /// <summary>Field-level entries of the problem document (empty when the body was not a problem).</summary>
     public IReadOnlyList<ApiProblemEntry> FieldErrors

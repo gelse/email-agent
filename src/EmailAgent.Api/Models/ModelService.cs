@@ -18,12 +18,9 @@ namespace EmailAgent.Api.Models;
 public sealed record ModelActor(Guid UserId, string Role, IPAddress? Ip);
 
 /// <summary>No <c>model_catalog</c> row with that id — §13.12 404 <c>/errors/model-not-found</c>.</summary>
-public sealed class ModelNotFoundException : Exception
+public sealed class ModelNotFoundException(Guid modelId) : Exception($"No model with id {modelId}.")
 {
-    public ModelNotFoundException(Guid modelId)
-        : base($"No model with id {modelId}.") => ModelId = modelId;
-
-    public Guid ModelId { get; }
+    public Guid ModelId { get; } = modelId;
 }
 
 /// <summary>
@@ -33,20 +30,14 @@ public sealed class ModelNotFoundException : Exception
 /// row, so this exception carries only the reason and the ≤ 256-byte response
 /// excerpt the problem document surfaces as <c>detail</c> — never a key.
 /// </summary>
-public sealed class ModelProbeFailedException : Exception
+public sealed class ModelProbeFailedException(string? reason, string responseExcerpt)
+    : Exception($"The model probe failed ({reason ?? "unknown reason"}).")
 {
-    public ModelProbeFailedException(string? reason, string responseExcerpt)
-        : base($"The model probe failed ({reason ?? "unknown reason"}).")
-    {
-        Reason = reason;
-        ResponseExcerpt = responseExcerpt ?? string.Empty;
-    }
-
     /// <summary><c>no_tool_calls</c> | <c>unexpected_tool_names</c>.</summary>
-    public string? Reason { get; }
+    public string? Reason { get; } = reason;
 
     /// <summary>The reconstructed response body, already clamped to 256 UTF-8 bytes by M3T2.</summary>
-    public string ResponseExcerpt { get; }
+    public string ResponseExcerpt { get; } = responseExcerpt ?? string.Empty;
 }
 
 /// <summary>

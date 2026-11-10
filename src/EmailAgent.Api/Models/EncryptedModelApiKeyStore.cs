@@ -120,12 +120,9 @@ public sealed class EncryptedModelApiKeyStore(EmailAgentDbContext db, IEncryptio
 /// integrity violation (an <c>api_key_secret_ref</c> pointing at nothing), so
 /// the endpoint layer answers §13.12 500 <c>/errors/internal-blob-missing</c>.
 /// </summary>
-public sealed class EncryptedBlobNotFoundException : Exception
+public sealed class EncryptedBlobNotFoundException(Guid blobId) : Exception($"Encrypted blob {blobId} does not exist.")
 {
-    public EncryptedBlobNotFoundException(Guid blobId)
-        : base($"Encrypted blob {blobId} does not exist.") => BlobId = blobId;
-
-    public Guid BlobId { get; }
+    public Guid BlobId { get; } = blobId;
 }
 
 /// <summary>
@@ -134,12 +131,9 @@ public sealed class EncryptedBlobNotFoundException : Exception
 /// 500 <c>/errors/internal-blob-missing</c> class as
 /// <see cref="EncryptedBlobNotFoundException"/> (never a client error).
 /// </summary>
-public sealed class InvalidBlobPurposeException : Exception
+public sealed class InvalidBlobPurposeException(string purpose) : Exception(
+    $"Encrypted blob purpose is '{purpose}', not "
+    + $"'{EncryptedModelApiKeyStore.ModelApiKeyPurpose}'.")
 {
-    public InvalidBlobPurposeException(string purpose)
-        : base($"Encrypted blob purpose is '{purpose}', not "
-            + $"'{EncryptedModelApiKeyStore.ModelApiKeyPurpose}'.")
-        => Purpose = purpose;
-
-    public string Purpose { get; }
+    public string Purpose { get; } = purpose;
 }

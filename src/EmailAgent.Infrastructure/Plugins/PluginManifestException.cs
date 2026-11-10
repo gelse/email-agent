@@ -6,10 +6,4 @@ namespace EmailAgent.Infrastructure.Plugins;
 /// manifest missing the identity fields the gates key on. The loader maps
 /// this to the <c>plugin_rejected</c> reason <c>manifest_invalid</c>.
 /// </summary>
-public sealed class PluginManifestException : Exception
-{
-    public PluginManifestException(string message)
-        : base(message)
-    {
-    }
-}
+public sealed class PluginManifestException(string message) : Exception(message);

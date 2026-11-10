@@ -24,18 +24,11 @@ namespace EmailAgent.Spa.Sources;
 /// A non-success response from the sources API, carrying the parsed RFC 7807
 /// document so callers can render <c>errors[]</c> inline next to each field.
 /// </summary>
-public sealed class SourcesApiException : Exception
+public sealed class SourcesApiException(HttpStatusCode status, ApiProblem? problem, string message) : Exception(message)
 {
-    public SourcesApiException(HttpStatusCode status, ApiProblem? problem, string message)
-        : base(message)
-    {
-        Status = status;
-        Problem = problem;
-    }
+    public HttpStatusCode Status { get; } = status;
 
-    public HttpStatusCode Status { get; }
-
-    public ApiProblem? Problem { get; }
+    public ApiProblem? Problem { get; } = problem;
 
     /// <summary>Field-level entries of the problem document (empty when the body was not a problem).</summary>
     public IReadOnlyList<ApiProblemEntry> FieldErrors

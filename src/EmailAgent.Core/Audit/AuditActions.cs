@@ -107,4 +107,43 @@ public static class AuditActions
     /// prompt text itself is NEVER stored (SQ-M3-4 / Q-O17a).
     /// </summary>
     public const string TestModelCompletion = "test_model_completion";
+
+    // --- M4: action dispatch (Q-O17b / SQ-M4-1) ---------------------------
+
+    /// <summary>
+    /// M4T3 (Q-O17b): <c>POST /v1/user/actions</c> created an
+    /// <c>action_configs</c> row plus its <c>action_config</c> blob. Never
+    /// carries the SMTP config or password in <c>metadata_json</c>.
+    /// </summary>
+    public const string CreateAction = "create_action";
+
+    /// <summary>M4T3 (Q-O17b): <c>PATCH /v1/user/actions/{id}</c>.</summary>
+    public const string UpdateAction = "update_action";
+
+    /// <summary>
+    /// M4T3 (Q-O17b): <c>DELETE /v1/user/actions/{id}</c> — config row +
+    /// blob in one transaction (409-guarded against referencing
+    /// <c>pending_actions</c>).
+    /// </summary>
+    public const string DeleteAction = "delete_action";
+
+    /// <summary>
+    /// M4T1 (Q-O17b): one row per dispatched <c>tool_call</c>.
+    /// <c>metadata_json</c> carries
+    /// <c>{ agent_config_id, processed_message_id, tool_call_index, type_id,
+    /// action_config_id?, decision, ok?, error?, dry_run? }</c> with
+    /// <c>decision ∈ executed | dry_run | pending_confirmation | failed |
+    /// rejected_not_allowed | handler_not_found | config_not_found |
+    /// skipped_abort</c>. <c>target_type = "action_config"</c> and
+    /// <c>target_id = &lt;action_config_id&gt;</c> when resolved, else both
+    /// <c>NULL</c>.
+    /// </summary>
+    public const string ActionDispatched = "action_dispatched";
+
+    /// <summary>
+    /// M4T1 (Q-O17b, exit criterion 2): a <c>tool_call</c> failed
+    /// <c>ValidateArgsAsync</c>. <c>metadata_json.decision = "invalid_args"</c>
+    /// plus <c>issues[]</c> (first 10 <c>{path, reason}</c>).
+    /// </summary>
+    public const string ActionInvalidArgs = "action_invalid_args";
 }

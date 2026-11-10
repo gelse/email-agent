@@ -67,6 +67,9 @@ builder.Services.AddScoped(sp => new ModelsClient(sp.GetRequiredService<HttpClie
 // picker loads from, over the same "Api" chain (bearer from
 // BearerTokenHandler).
 builder.Services.AddScoped(sp => new UserModelsClient(sp.GetRequiredService<HttpClient>()));
+// M4T4: actions (DEK-gated, via DekHeaderHandler) and notifications.
+builder.Services.AddScoped(sp => new EmailAgent.Spa.Actions.ActionsClient(sp.GetRequiredService<HttpClient>()));
+builder.Services.AddScoped(sp => new EmailAgent.Spa.NotificationsApi.NotificationsClient(sp.GetRequiredService<HttpClient>()));
 
 var host = builder.Build();
 

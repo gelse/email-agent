@@ -14,18 +14,13 @@ public sealed class TokenStore
     private readonly Lock _gate = new();
     private string? _token;
 
-    public TokenStore()
-    {
-        DekStore = new DekStore();
-    }
-
     /// <summary>
     /// M2-only (SQ-12): the unwrapped per-user data-encryption key the
     /// <c>X-User-Dek</c> transport carries. It is a sub-store of this
     /// singleton rather than its own DI service, so one lifecycle governs
     /// both values and <see cref="Clear"/> drops them together.
     /// </summary>
-    public DekStore DekStore { get; }
+    public DekStore DekStore { get; } = new();
 
     /// <summary>The current bearer access token, or <c>null</c> when signed out.</summary>
     public string? AccessToken

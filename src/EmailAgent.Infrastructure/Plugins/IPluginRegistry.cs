@@ -1,3 +1,4 @@
+using EmailAgent.Contracts.ActionHandlers;
 using EmailAgent.Contracts.AgentEngines;
 using EmailAgent.Contracts.MessageSources;
 
@@ -16,16 +17,15 @@ namespace EmailAgent.Infrastructure.Plugins;
 /// <remarks>
 /// <para>
 /// Each plugin occupies exactly ONE slot: the slot its declared entry type
-/// implements — <see cref="IMessageSource"/> or <see cref="IAgentEngine"/>.
-/// The <see cref="IAgentEngine"/> slot was added with its implementation in
-/// M3T1 (the M2 wording "added together with their implementations (M3/M8)"
-/// made it pending); <c>IActionHandler</c> still waits for M8.
+/// implements — <see cref="IMessageSource"/>, <see cref="IAgentEngine"/>,
+/// or <see cref="IActionHandler"/> (M4T1; M8 ships the first Telegram
+/// implementation).
 /// </para>
 /// <para>
 /// Re-registering an existing key overwrites it (later candidate wins: a
 /// drop-folder plugin overrides the same-id DEFAULT build-output plugin); the
-/// entry count per key stays exactly one. Both slots participate in M2T7
-/// refusal-wins: the loader unregisters the refused plugin_id from BOTH slots.
+/// entry count per key stays exactly one. All slots participate in M2T7
+/// refusal-wins: the loader unregisters the refused plugin_id from every slot.
 /// </para>
 /// </remarks>
 public interface IPluginRegistry
@@ -62,6 +62,18 @@ public interface IPluginRegistry
     /// <summary>All registered agent-engine plugin ids (snapshot; unordered; M3T1).</summary>
     IReadOnlyCollection<string> AgentEngineIds { get; }
 
-    /// <summary>Removes every entry from both slots (called by the loader before a reload).</summary>
+    /// <summary>Registers (or replaces) the action handler under <paramref name="pluginId"/> (M4T1).</summary>
+    void RegisterActionHandler(string pluginId, IActionHandler handler);
+
+    /// <summary>Returns the action handler registered under <paramref name="pluginId"/>, or <c>null</c> (M4T1).</summary>
+    IActionHandler? GetActionHandler(string pluginId);
+
+    /// <summary>Removes the action-handler entry under <paramref name="pluginId"/> if present (M4T1; refusal-wins sees every slot).</summary>
+    void UnregisterActionHandler(string pluginId);
+
+    /// <summary>All registered action-handler plugin ids (snapshot; unordered; M4T1).</summary>
+    IReadOnlyCollection<string> ActionHandlerIds { get; }
+
+    /// <summary>Removes every entry from all slots (called by the loader before a reload).</summary>
     void Clear();
 }

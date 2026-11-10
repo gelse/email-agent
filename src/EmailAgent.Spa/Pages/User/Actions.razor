@@ -1,0 +1,174 @@
+@page "/user/actions"
+@attribute [Authorize(Roles = "User,Admin")]
+@using EmailAgent.Spa.Actions
+@inject ActionsClient ActionsApi
+@inject TokenStore TokenStore
+@inject JwtRoleParser RoleParser
+@inject NavigationManager Nav
+@inject ToastService Toasts
+
+@* M4T4: /user/actions (DEK-gated like /user/sources). *@
+<PageTitle>Actions — Email Agent</PageTitle>
+
+@if (!_authorized) { }
+else if (!_unlocked)
+{
+    <h1>Actions</h1>
+    @if (_error is not null) { <div class="error-box" id="actions-error" role="alert">@_error</div> }
+    <PassphrasePrompt OnUnlocked="OnUnlockedAsync" />
+}
+else
+{
+    <h1>Actions</h1>
+    @if (_error is not null) { <div class="error-box" id="actions-error" role="alert">@_error</div> }
+
+    <div class="toolbar">
+        <button type="button" class="btn-primary" id="add-action-open" @onclick="OpenAddDialog">Add action</button>
+        <button type="button" class="btn-secondary" id="actions-reload" disabled="@_loading" @onclick="() => LoadAsync()">Reload</button>
+    </div>
+
+    @if (_loading) { <p>Loading…</p> }
+    else if (!_loaded) { }
+    else if (_actions.Count == 0)
+    {
+        @if (_error is null) { <p id="actions-empty">No actions yet. Add one to let the agent reply or forward mail.</p> }
+    }
+    else
+    {
+        <table class="action-table" id="actions-table">
+            <thead>
+                <tr>
+                    <th scope="col">Display name</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Require confirmation</th>
+                    <th scope="col">Dry run default</th>
+                    <th scope="col"><span class="visually-hidden">Actions</span></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in _actions)
+                {
+                    <tr @key="row.Id">
+                        <td>@row.DisplayName</td>
+                        <td>@row.TypeId</td>
+                        <td>@(row.RequireConfirmation ? "Yes" : "No")</td>
+                        <td>@(row.DryRunDefault ? "Yes" : "No")</td>
+                        <td class="action-actions">
+                            <button type="button" class="btn-secondary" id="@EditButtonId(row.Id)" @onclick="() => OpenEditDialog(row.Id)">Edit</button>
+                            <button type="button" class="btn-secondary" id="@DeleteButtonId(row.Id)" @onclick="() => _deleteTarget = row">Delete</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    @if (!_loading && _nextCursor is not null)
+    {
+        <button type="button" class="btn-secondary" id="actions-load-more" @onclick="LoadMoreAsync">Load more</button>
+    }
+
+    @if (_showAdd || _editId is not null)
+    {
+        <EditActionDialog ActionId="@_editId" OnCancel="CloseDialogs" OnSaved="OnSavedAsync" />
+    }
+
+    @if (_deleteTarget is not null)
+    {
+        <DeleteActionConfirm Action="@_deleteTarget" OnCancel="() => _deleteTarget = null" OnDeleted="OnDeletedAsync" />
+    }
+}
+
+@code {
+    private bool _authorized;
+    private bool _unlocked;
+    private bool _loading;
+    private bool _loaded;
+    private bool _showAdd;
+    private Guid? _editId;
+    private ActionConfigDto? _deleteTarget;
+    private List<ActionConfigDto> _actions = new();
+    private string? _nextCursor;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var token = TokenStore.AccessToken;
+        var roles = token is null ? Array.Empty<string>() : RoleParser.GetRoles(token);
+        if (!roles.Contains("User") && !roles.Contains("Admin")) { Nav.NavigateTo("/account/login"); return; }
+        _authorized = true;
+        _unlocked = !TokenStore.DekStore.IsEmpty;
+        if (_unlocked) await LoadAsync();
+    }
+
+    private async Task OnUnlockedAsync() { _unlocked = true; await LoadAsync(); }
+
+    private async Task LoadAsync()
+    {
+        if (!EnsureUnlocked()) return;
+        _loading = true; _error = null;
+        try
+        {
+            var page = await ActionsApi.ListAsync(cursor: null);
+            _actions = page.Items; _nextCursor = page.NextCursor; _loaded = true;
+        }
+        catch (ActionsApiException ex) when (ex.Status == System.Net.HttpStatusCode.Unauthorized) { Nav.NavigateTo("/account/login"); }
+        catch (ActionsApiException ex) when (IsDekRejected(ex)) { Relock("Your cached key does not unlock this account's actions. Enter your passphrase again to continue."); }
+        catch (ActionsApiException ex) { _error = ex.Message; }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+        finally { _loading = false; }
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (string.IsNullOrEmpty(_nextCursor) || !EnsureUnlocked()) return;
+        _loading = true; _error = null;
+        try
+        {
+            var page = await ActionsApi.ListAsync(cursor: _nextCursor);
+            _actions.AddRange(page.Items); _nextCursor = page.NextCursor; _loaded = true;
+        }
+        catch (ActionsApiException ex) when (ex.Status == System.Net.HttpStatusCode.Unauthorized) { Nav.NavigateTo("/account/login"); }
+        catch (ActionsApiException ex) when (IsDekRejected(ex)) { Relock("Your cached key does not unlock this account's actions. Enter your passphrase again to continue."); }
+        catch (ActionsApiException ex) { _error = ex.Message; }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+        finally { _loading = false; }
+    }
+
+    private static bool IsDekRejected(ActionsApiException ex)
+        => ex.Status == System.Net.HttpStatusCode.BadRequest && (
+            ex.Problem?.Type is "/errors/dek-invalid" or "/errors/dek-required"
+            || (ex.Problem?.Type == "/errors/validation" && ex.FieldErrors.Any(e => e.Name == "x-user-dek")));
+
+    private void Relock(string message)
+    {
+        TokenStore.DekStore.Clear();
+        _actions.Clear(); _loaded = false; _nextCursor = null;
+        _deleteTarget = null; _showAdd = false; _editId = null;
+        _unlocked = false; _loading = false; _error = message;
+    }
+
+    private bool EnsureUnlocked()
+    {
+        if (!TokenStore.DekStore.IsEmpty) return true;
+        Relock("Your session no longer has an unlock key. Enter your passphrase again to continue.");
+        return false;
+    }
+
+    private void OpenAddDialog() { if (EnsureUnlocked()) _showAdd = true; }
+    private void OpenEditDialog(Guid id) { if (EnsureUnlocked()) { _showAdd = false; _editId = id; } }
+    private void CloseDialogs() { _showAdd = false; _editId = null; }
+
+    private async Task OnSavedAsync(ActionConfigDto _) { CloseDialogs(); await LoadAsync(); }
+
+    private async Task OnDeletedAsync()
+    {
+        var name = _deleteTarget?.DisplayName;
+        _deleteTarget = null;
+        if (!string.IsNullOrWhiteSpace(name)) Toasts.ShowSuccess($"Action '{name}' deleted.");
+        await LoadAsync();
+    }
+
+    internal static string EditButtonId(Guid id) => $"action-edit-{id:N}";
+    internal static string DeleteButtonId(Guid id) => $"action-delete-{id:N}";
+}
