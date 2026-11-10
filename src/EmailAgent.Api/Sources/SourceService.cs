@@ -45,7 +45,11 @@ public sealed record FetchOutcome(
 /// source row, its config blob and its audit evidence commit together or not
 /// at all.
 /// </remarks>
-public sealed class SourceService
+public sealed class SourceService(
+    EmailAgentDbContext db,
+    IPluginRegistry registry,
+    EncryptedSourceConfigStore store,
+    IAuditLogger audit)
 {
     /// <summary>§6 <c>message_sources.interval_minutes</c> default (task scope table).</summary>
     public const int DefaultIntervalMinutes = 5;
@@ -55,23 +59,6 @@ public sealed class SourceService
 
     /// <summary>Upper bound of the M2 interval knob — one day (M2T5 decision, task file).</summary>
     public const int MaxIntervalMinutes = 1440;
-
-    private readonly EmailAgentDbContext _db;
-    private readonly IPluginRegistry _registry;
-    private readonly EncryptedSourceConfigStore _store;
-    private readonly IAuditLogger _audit;
-
-    public SourceService(
-        EmailAgentDbContext db,
-        IPluginRegistry registry,
-        EncryptedSourceConfigStore store,
-        IAuditLogger audit)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
-        _store = store ?? throw new ArgumentNullException(nameof(store));
-        _audit = audit ?? throw new ArgumentNullException(nameof(audit));
-    }
 
     /// <summary>
     /// <c>GET /v1/user/sources</c> — one keyset page of the caller's sources
@@ -90,7 +77,7 @@ public sealed class SourceService
         ArgumentNullException.ThrowIfNull(dek);
 
         // Read-only projection: no need to track up to 100 rows per page.
-        IQueryable<MessageSource> query = _db.MessageSources
+        IQueryable<MessageSource> query = db.MessageSources
             .AsNoTracking()
             .Where(source => source.UserId == actor.UserId);
 
@@ -115,7 +102,7 @@ public sealed class SourceService
         var items = new List<SourceDto>(rows.Count);
         foreach (var row in rows)
         {
-            var config = await _store.ReadAsync(actor.UserId, dek, row.ConfigBlobId, ct);
+            var config = await store.ReadAsync(actor.UserId, dek, row.ConfigBlobId, ct);
             items.Add(ToDto(row, config));
         }
 
@@ -148,9 +135,9 @@ public sealed class SourceService
         var plugin = ResolvePlugin(typeId);
         ValidateConfig(plugin, config);
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
-        var blobId = await _store.WriteAsync(actor.UserId, dek, config, ct);
+        var blobId = await store.WriteAsync(actor.UserId, dek, config, ct);
         var source = new MessageSource
         {
             Id = Guid.NewGuid(),
@@ -164,10 +151,10 @@ public sealed class SourceService
             CreatedAt = DateTimeOffset.UtcNow,
         };
 
-        _db.MessageSources.Add(source);
-        await _db.SaveChangesAsync(ct);
+        db.MessageSources.Add(source);
+        await db.SaveChangesAsync(ct);
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
             ActorEvent(actor, AuditActions.CreateSource, source.Id, new Dictionary<string, object?>
             {
                 ["type_id"] = source.TypeId,
@@ -191,7 +178,7 @@ public sealed class SourceService
         ArgumentNullException.ThrowIfNull(dek);
 
         var source = await FindOwnedAsync(actor.UserId, id, ct);
-        var config = await _store.ReadAsync(actor.UserId, dek, source.ConfigBlobId, ct);
+        var config = await store.ReadAsync(actor.UserId, dek, source.ConfigBlobId, ct);
         return ToDto(source, config);
     }
 
@@ -219,7 +206,7 @@ public sealed class SourceService
 
         // Always read the stored document: it feeds the response's config
         // member and supplies the password the request did not carry.
-        var storedConfig = await _store.ReadAsync(actor.UserId, dek, source.ConfigBlobId, ct);
+        var storedConfig = await store.ReadAsync(actor.UserId, dek, source.ConfigBlobId, ct);
         var effectiveConfig = storedConfig;
 
         if (config is { } candidate)
@@ -238,24 +225,24 @@ public sealed class SourceService
             source.IntervalMinutes = interval;
         }
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         if (config is not null)
         {
             var previousBlobId = source.ConfigBlobId;
-            source.ConfigBlobId = await _store.WriteAsync(actor.UserId, dek, effectiveConfig, ct);
-            await _db.SaveChangesAsync(ct);
+            source.ConfigBlobId = await store.WriteAsync(actor.UserId, dek, effectiveConfig, ct);
+            await db.SaveChangesAsync(ct);
 
             // Point the FK at the new blob first — the old row is FK-protected
             // until this save lands (Q-O15 / SQ-7, same transaction).
-            await _store.DeleteAsync(previousBlobId, ct);
+            await store.DeleteAsync(previousBlobId, ct);
         }
         else
         {
-            await _db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(ct);
         }
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
             ActorEvent(actor, AuditActions.UpdateSource, source.Id, new Dictionary<string, object?>
             {
                 ["changed_fields"] = ChangedFields(displayName, intervalMinutes, config),
@@ -284,20 +271,20 @@ public sealed class SourceService
 
         var source = await FindOwnedAsync(actor.UserId, id, ct);
 
-        if (await _db.ProcessedMessages.AsNoTracking()
+        if (await db.ProcessedMessages.AsNoTracking()
                 .AnyAsync(message => message.SourceId == source.Id, ct))
         {
             throw new SourceHasMessagesException(source.Id);
         }
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         var blobId = source.ConfigBlobId;
-        _db.MessageSources.Remove(source);
-        await _db.SaveChangesAsync(ct);
-        await _store.DeleteAsync(blobId, ct);
+        db.MessageSources.Remove(source);
+        await db.SaveChangesAsync(ct);
+        await store.DeleteAsync(blobId, ct);
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
             ActorEvent(actor, AuditActions.DeleteSource, source.Id, new Dictionary<string, object?>
             {
                 ["type_id"] = source.TypeId,
@@ -346,7 +333,7 @@ public sealed class SourceService
                 ? "The connection test failed."
                 : result.Error;
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
             ActorEvent(actor, AuditActions.TestSourceConnection, targetId: null,
                 new Dictionary<string, object?>
                 {
@@ -382,7 +369,7 @@ public sealed class SourceService
         ArgumentNullException.ThrowIfNull(dek);
 
         var source = await FindOwnedAsync(actor.UserId, id, ct);
-        var config = await _store.ReadAsync(actor.UserId, dek, source.ConfigBlobId, ct);
+        var config = await store.ReadAsync(actor.UserId, dek, source.ConfigBlobId, ct);
         var plugin = ResolvePlugin(source.TypeId);
 
         // Q-F4: validation runs at save AND at execution time — a plugin
@@ -397,11 +384,11 @@ public sealed class SourceService
         }
 
         var newProcessed = 0;
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         foreach (var message in messages)
         {
-            var alreadyStored = await _db.ProcessedMessages.AsNoTracking()
+            var alreadyStored = await db.ProcessedMessages.AsNoTracking()
                 .AnyAsync(
                     row => row.SourceId == source.Id && row.RemoteUid == message.RemoteUid, ct);
 
@@ -410,10 +397,10 @@ public sealed class SourceService
                 continue;
             }
 
-            var bodyBlobId = await _store.WriteBodyAsync(
+            var bodyBlobId = await store.WriteBodyAsync(
                 actor.UserId, dek, Encoding.UTF8.GetBytes(message.BodyText), ct);
 
-            var inserted = await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            var inserted = await db.Database.ExecuteSqlInterpolatedAsync($"""
                 INSERT INTO processed_messages
                     (id, source_id, remote_uid, received_remote_at, stage, prefilter_matched,
                      model_decision_json, actions_executed_json, prompt_tokens, completion_tokens,
@@ -433,7 +420,7 @@ public sealed class SourceService
             {
                 // The row was written concurrently — drop the blob we just made
                 // so no unreferenced message_body blob survives the race.
-                await _store.DeleteAsync(bodyBlobId, ct);
+                await store.DeleteAsync(bodyBlobId, ct);
             }
         }
 
@@ -443,9 +430,9 @@ public sealed class SourceService
         source.CheckpointJson = JsonSerializer.Serialize(advanced);
         source.LastRunAt = now;
         source.NextRunAt = now.AddMinutes(source.IntervalMinutes);
-        await _db.SaveChangesAsync(ct);
+        await db.SaveChangesAsync(ct);
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
             ActorEvent(actor, AuditActions.FetchSourceNow, source.Id, new Dictionary<string, object?>
             {
                 ["type_id"] = source.TypeId,
@@ -461,7 +448,7 @@ public sealed class SourceService
 
     /// <summary>Registry lookup; an unknown <c>type_id</c> is a §13.12 400.</summary>
     private IMessageSource ResolvePlugin(string typeId)
-        => _registry.GetMessageSource(typeId) ?? throw new PluginNotRegisteredException(typeId);
+        => registry.GetMessageSource(typeId) ?? throw new PluginNotRegisteredException(typeId);
 
     /// <summary>
     /// The plugin's <c>ConfigSchema</c> gate (M2T2). Failure becomes
@@ -548,7 +535,7 @@ public sealed class SourceService
     }
 
     private async Task<MessageSource> FindOwnedAsync(Guid userId, Guid id, CancellationToken ct)
-        => await _db.MessageSources.FirstOrDefaultAsync(
+        => await db.MessageSources.FirstOrDefaultAsync(
                 source => source.Id == id && source.UserId == userId, ct)
             ?? throw new SourceNotFoundException(id);
 

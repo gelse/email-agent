@@ -100,7 +100,14 @@ namespace EmailAgent.Infrastructure.Plugins;
 /// build-output plugin.
 /// </para>
 /// </remarks>
-public sealed class PluginLoader : IHostedService
+public sealed class PluginLoader(
+    IServiceProvider services,
+    IOptions<PluginOptions> options,
+    PluginSignatureVerifier verifier,
+    PluginManifestValidator validator,
+    DefaultTrustAnchor trustAnchor,
+    IPluginRegistry registry,
+    ILogger<PluginLoader> logger) : IHostedService
 {
     /// <summary>Companion-manifest suffix: <c>&lt;assembly-name&gt;.plugin.json</c> (task Risks).</summary>
     internal const string ManifestSuffix = ".plugin.json";
@@ -116,38 +123,11 @@ public sealed class PluginLoader : IHostedService
     private const int UnloadGraceMs = 5000;
     private const int UnloadPollMs = 100;
 
-    private readonly IServiceProvider _services;
-    private readonly IOptions<PluginOptions> _options;
-    private readonly PluginSignatureVerifier _verifier;
-    private readonly PluginManifestValidator _validator;
-    private readonly DefaultTrustAnchor _trustAnchor;
-    private readonly IPluginRegistry _registry;
-    private readonly ILogger<PluginLoader> _logger;
-
     /// <summary>Serializes whole reload cycles (a monitor lock cannot span the awaits below).</summary>
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
 
     private readonly Lock _sync = new();
     private readonly List<LoadedPlugin> _loaded = new();
-
-    /// <summary>Creates the loader; every dependency is a singleton (registered in Program.cs).</summary>
-    public PluginLoader(
-        IServiceProvider services,
-        IOptions<PluginOptions> options,
-        PluginSignatureVerifier verifier,
-        PluginManifestValidator validator,
-        DefaultTrustAnchor trustAnchor,
-        IPluginRegistry registry,
-        ILogger<PluginLoader> logger)
-    {
-        _services = services;
-        _options = options;
-        _verifier = verifier;
-        _validator = validator;
-        _trustAnchor = trustAnchor;
-        _registry = registry;
-        _logger = logger;
-    }
 
     /// <summary>Host startup: one full cycle. Never throws (task step 6).</summary>
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -162,7 +142,7 @@ public sealed class PluginLoader : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Plugin load cycle failed; continuing without plugins");
+            logger.LogError(ex, "Plugin load cycle failed; continuing without plugins");
         }
     }
 
@@ -209,13 +189,13 @@ public sealed class PluginLoader : IHostedService
             // IPluginRegistry contract: Clear() before a reload; the
             // repopulate below re-registers everything (DEFAULTs first, so a
             // drop-in with the same plugin_id wins — "later candidate wins").
-            _registry.Clear();
+            registry.Clear();
 
             if (rescan)
             {
-                var options = _options.Value;
+                var pluginOptions = options.Value;
                 await LoadDefaultsAsync(cancellationToken).ConfigureAwait(false);
-                await ScanDropInsAsync(options, cancellationToken).ConfigureAwait(false);
+                await ScanDropInsAsync(pluginOptions, cancellationToken).ConfigureAwait(false);
             }
         }
         finally
@@ -243,7 +223,7 @@ public sealed class PluginLoader : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Plugin reload after SIGHUP failed");
+            logger.LogError(ex, "Plugin reload after SIGHUP failed");
         }
     }
 
@@ -258,7 +238,7 @@ public sealed class PluginLoader : IHostedService
 
     private async Task LoadDefaultsAsync(CancellationToken cancellationToken)
     {
-        foreach (var entry in _trustAnchor.Entries)
+        foreach (var entry in trustAnchor.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -323,7 +303,7 @@ public sealed class PluginLoader : IHostedService
                 // build-output bytes — a rebuilt DLL whose bytes moved was
                 // refused above; update DefaultTrustAnchor.cs when
                 // DefaultTrustAnchorTests points at the drift).
-                var anchored = _trustAnchor.IsDefault(manifest.PluginId, manifest.Version, sha256);
+                var anchored = trustAnchor.IsDefault(manifest.PluginId, manifest.Version, sha256);
                 if (!anchored)
                 {
                     await RejectAsync(
@@ -340,7 +320,7 @@ public sealed class PluginLoader : IHostedService
                     continue;
                 }
 
-                var validation = _validator.Validate(manifest);
+                var validation = validator.Validate(manifest);
                 if (!validation.Ok)
                 {
                     throw new PluginCapabilityException(
@@ -390,7 +370,7 @@ public sealed class PluginLoader : IHostedService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to load DEFAULT plugin {File}", fileName);
+                logger.LogError(ex, "Failed to load DEFAULT plugin {File}", fileName);
                 await RejectAsync(
                         targetId: fileName,
                         targetType: "plugin",
@@ -409,7 +389,7 @@ public sealed class PluginLoader : IHostedService
         var directory = options.PluginsDirectory;
         if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
         {
-            _logger.LogDebug("Plugin directory {Directory} does not exist; no drop-ins loaded", directory);
+            logger.LogDebug("Plugin directory {Directory} does not exist; no drop-ins loaded", directory);
             return;
         }
 
@@ -428,7 +408,7 @@ public sealed class PluginLoader : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to enumerate plugin directory {Directory}", directory);
+            logger.LogError(ex, "Failed to enumerate plugin directory {Directory}", directory);
             return;
         }
 
@@ -459,20 +439,20 @@ public sealed class PluginLoader : IHostedService
             // "unregistered" that did not occur — it stays at debug level.
             // Both slots are checked and cleaned (M3T1: a refusal poisons the
             // id whether the claimant registered as a source or as an engine).
-            var wasRegistered = _registry.GetMessageSource(pluginId) is not null
-                || _registry.GetAgentEngine(pluginId) is not null;
-            _registry.UnregisterMessageSource(pluginId);
-            _registry.UnregisterAgentEngine(pluginId);
+            var wasRegistered = registry.GetMessageSource(pluginId) is not null
+                || registry.GetAgentEngine(pluginId) is not null;
+            registry.UnregisterMessageSource(pluginId);
+            registry.UnregisterAgentEngine(pluginId);
             if (wasRegistered)
             {
-                _logger.LogWarning(
+                logger.LogWarning(
                     "Plugin {PluginId} unregistered: its drop-in candidate was refused during this reload cycle "
                     + "(refusal-wins — remove the refused file and reload to restore it)",
                     pluginId);
             }
             else
             {
-                _logger.LogDebug(
+                logger.LogDebug(
                     "Refused drop-in claimed plugin id {PluginId}, which was not registered at the end of this scan "
                     + "(nothing to unregister)",
                     pluginId);
@@ -539,10 +519,10 @@ public sealed class PluginLoader : IHostedService
                 // module initializers before any gate and, on every startup
                 // and SIGHUP, would emit a plugin_rejected audit row for a
                 // refusal that never happened (nested review round 2, WARNING).
-                var anchorEntry = _trustAnchor.FindByAssemblyFile(fileName);
+                var anchorEntry = trustAnchor.FindByAssemblyFile(fileName);
                 if (anchorEntry is null)
                 {
-                    _logger.LogDebug(
+                    logger.LogDebug(
                         "Skipping {File}: no {Manifest} companion and not a DefaultTrustAnchor assembly "
                         + "(treated as a sibling dependency, not a plugin candidate)",
                         fileName,
@@ -587,7 +567,7 @@ public sealed class PluginLoader : IHostedService
                     $"manifest of {fileName} must carry a non-empty plugin_id and version");
             }
 
-            var anchored = _trustAnchor.IsDefault(manifest.PluginId, manifest.Version, sha256);
+            var anchored = trustAnchor.IsDefault(manifest.PluginId, manifest.Version, sha256);
 
             // Gate 2: signature over (dll bytes, manifest text). A DISK
             // companion is always checked — never waived by the anchor:
@@ -628,7 +608,7 @@ public sealed class PluginLoader : IHostedService
                         $"signature in {manifestFileName} is not valid base64");
                 }
 
-                if (!_verifier.Verify(bytes, manifestText, signature))
+                if (!verifier.Verify(bytes, manifestText, signature))
                 {
                     throw new PluginSignatureException(
                         PluginSignatureException.SignatureMismatch,
@@ -649,7 +629,7 @@ public sealed class PluginLoader : IHostedService
             }
 
             // Gate 4: capability allow-list (M2 SQ-6 / Q-D6).
-            var validation = _validator.Validate(manifest);
+            var validation = validator.Validate(manifest);
             if (!validation.Ok)
             {
                 throw new PluginCapabilityException(
@@ -754,7 +734,7 @@ public sealed class PluginLoader : IHostedService
         catch (Exception ex)
         {
             refusedPluginId = claimedPluginId;
-            _logger.LogError(ex, "Failed to load plugin candidate {File}", fileName);
+            logger.LogError(ex, "Failed to load plugin candidate {File}", fileName);
             await RejectAsync(
                     targetId: fileName,
                     targetType: "plugin",
@@ -842,11 +822,11 @@ public sealed class PluginLoader : IHostedService
         // openai-compatible DEFAULT) or an IMessageSource (the M2 plugins).
         if (instance is IAgentEngine agentEngine)
         {
-            _registry.RegisterAgentEngine(manifest.PluginId, agentEngine);
+            registry.RegisterAgentEngine(manifest.PluginId, agentEngine);
         }
         else
         {
-            _registry.RegisterMessageSource(manifest.PluginId, (IMessageSource)instance);
+            registry.RegisterMessageSource(manifest.PluginId, (IMessageSource)instance);
         }
 
         lock (_sync)
@@ -867,7 +847,7 @@ public sealed class PluginLoader : IHostedService
                 cancellationToken)
             .ConfigureAwait(false);
 
-        _logger.LogInformation(
+        logger.LogInformation(
             "Loaded plugin {PluginId} {Version} from {File} (capabilities: {Capabilities})",
             manifest.PluginId,
             manifest.Version,
@@ -938,7 +918,7 @@ public sealed class PluginLoader : IHostedService
             // DI (M3T1: an engine's HttpClient comes from Program.cs).
             try
             {
-                instance = ActivatorUtilities.CreateInstance(_services, declared);
+                instance = ActivatorUtilities.CreateInstance(services, declared);
             }
             catch (Exception ex)
             {
@@ -989,7 +969,7 @@ public sealed class PluginLoader : IHostedService
     {
         try
         {
-            await using var scope = _services.CreateAsyncScope();
+            await using var scope = services.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<EmailAgentDbContext>();
             return await db.PluginApprovals
                 .AnyAsync(a => a.PluginId == pluginId && a.Version == version, cancellationToken)
@@ -997,7 +977,7 @@ public sealed class PluginLoader : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(
+            logger.LogWarning(
                 ex,
                 "Approval lookup failed for plugin {PluginId} {Version}; rejecting (fail-closed)",
                 pluginId,
@@ -1021,7 +1001,7 @@ public sealed class PluginLoader : IHostedService
     {
         try
         {
-            await using var scope = _services.CreateAsyncScope();
+            await using var scope = services.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<EmailAgentDbContext>();
 
             var now = DateTimeOffset.UtcNow;
@@ -1059,7 +1039,7 @@ public sealed class PluginLoader : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogError(
+            logger.LogError(
                 ex,
                 "Failed to record signature for plugin {PluginId} {Version}",
                 manifest.PluginId,
@@ -1076,7 +1056,7 @@ public sealed class PluginLoader : IHostedService
         CancellationToken cancellationToken,
         string? pluginId = null)
     {
-        _logger.LogWarning(
+        logger.LogWarning(
             "Rejected plugin candidate {Target}: {Reason} ({Detail}) — {Message}",
             targetId,
             reason,
@@ -1107,7 +1087,7 @@ public sealed class PluginLoader : IHostedService
     {
         try
         {
-            await using var scope = _services.CreateAsyncScope();
+            await using var scope = services.CreateAsyncScope();
             var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
             await audit.LogAsync(
                     new AuditEvent(
@@ -1123,7 +1103,7 @@ public sealed class PluginLoader : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to write audit event {Action} for {Target}", action, targetId);
+            logger.LogError(ex, "Failed to write audit event {Action} for {Target}", action, targetId);
         }
     }
 
@@ -1143,7 +1123,7 @@ public sealed class PluginLoader : IHostedService
 
         if (unit.Context.IsAlive)
         {
-            _logger.LogWarning(
+            logger.LogWarning(
                 "Plugin assembly {File} was not unloaded within {Grace}ms (still referenced)",
                 unit.FileName,
                 UnloadGraceMs);

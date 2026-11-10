@@ -93,34 +93,16 @@ public sealed record TestCompletionTarget(
 /// returned (the success log line carries ids, counts and duration only).
 /// </para>
 /// </remarks>
-internal sealed class TestCompletionService
+internal sealed class TestCompletionService(
+    EmailAgentDbContext db,
+    EncryptedModelApiKeyStore apiKeyStore,
+    IPluginRegistry pluginRegistry,
+    ICostDerivationService cost,
+    IAuditLogger audit,
+    ILogger<TestCompletionService> logger)
 {
     /// <summary>SQ-M3-15: the sanitized <c>detail</c> budget in UTF-8 bytes (M3T2's excerpt helper).</summary>
     private const int DetailByteBudget = 256;
-
-    private readonly EmailAgentDbContext _db;
-    private readonly EncryptedModelApiKeyStore _apiKeyStore;
-    private readonly IPluginRegistry _pluginRegistry;
-    private readonly ICostDerivationService _cost;
-    private readonly IAuditLogger _audit;
-    private readonly ILogger<TestCompletionService> _logger;
-
-    /// <summary>Creates the service (request-scoped: shares M3T3's DbContext and audit sink).</summary>
-    public TestCompletionService(
-        EmailAgentDbContext db,
-        EncryptedModelApiKeyStore apiKeyStore,
-        IPluginRegistry pluginRegistry,
-        ICostDerivationService cost,
-        IAuditLogger audit,
-        ILogger<TestCompletionService> logger)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _apiKeyStore = apiKeyStore ?? throw new ArgumentNullException(nameof(apiKeyStore));
-        _pluginRegistry = pluginRegistry ?? throw new ArgumentNullException(nameof(pluginRegistry));
-        _cost = cost ?? throw new ArgumentNullException(nameof(cost));
-        _audit = audit ?? throw new ArgumentNullException(nameof(audit));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    }
 
     /// <summary>
     /// Runs the three model gates — 404 unknown row, 400 disabled, 400
@@ -131,7 +113,7 @@ internal sealed class TestCompletionService
     /// </summary>
     public async Task<TestCompletionTarget> PrepareAsync(Guid modelId, CancellationToken ct)
     {
-        var entry = await _db.ModelCatalog.AsNoTracking()
+        var entry = await db.ModelCatalog.AsNoTracking()
                 .FirstOrDefaultAsync(model => model.Id == modelId, ct)
             ?? throw new ModelNotFoundException(modelId);
 
@@ -152,10 +134,10 @@ internal sealed class TestCompletionService
                 OpenAICompatibleConfigSchema.Build());
         }
 
-        var engine = _pluginRegistry.GetAgentEngine(entry.Provider);
+        var engine = pluginRegistry.GetAgentEngine(entry.Provider);
         if (engine is null)
         {
-            _logger.LogWarning(
+            logger.LogWarning(
                 "Test completion for model {ModelId} refused: no agent engine is registered for provider {Provider}.",
                 modelId, entry.Provider);
             throw new TestCompletionFailedException(
@@ -187,7 +169,7 @@ internal sealed class TestCompletionService
         var promptHash = ComputePromptHash(
             request.SystemPrompt ?? string.Empty, request.UserPrompt ?? string.Empty);
 
-        var apiKey = await _apiKeyStore.ReadAsync(target.ApiKeyBlobId, ct);
+        var apiKey = await apiKeyStore.ReadAsync(target.ApiKeyBlobId, ct);
 
         // A dictionary (not an anonymous object) keeps the member names the
         // M3T1 schema declares, independent of any naming policy (M3T2
@@ -238,7 +220,7 @@ internal sealed class TestCompletionService
             // response body or the detail: the provider body could echo a
             // credential (the sanitized detail is for the RESPONSE, not the
             // log — task Risks: api_key is never logged).
-            _logger.LogWarning(
+            logger.LogWarning(
                 "Test completion for model {ModelId} failed with engine HTTP status {StatusCode}.",
                 modelId, ex.StatusCode);
             throw new TestCompletionFailedException(
@@ -252,7 +234,7 @@ internal sealed class TestCompletionService
             // /errors/server-error. They map to the SAME typed 500 with a
             // SANITIZED detail (an exception message can echo a URL or a key
             // shape), and the warning carries the exception TYPE only.
-            _logger.LogWarning(
+            logger.LogWarning(
                 "Test completion for model {ModelId} failed with a transport error ({ExceptionType}).",
                 modelId, ex.GetType().Name);
             throw new TestCompletionFailedException(SanitizeDetail(ex.Message));
@@ -277,7 +259,7 @@ internal sealed class TestCompletionService
         // `?? 0`, which would fabricate "0 tokens, $0" for usage-absent
         // responses (cost must stay NULL instead).
         var tokens = TokenCounts.From(done);
-        var cost = _cost.DeriveCost(
+        var derivedCost = cost.DeriveCost(
             tokens, entry, providerCostHeaders: null, providerUsageBlock: done?.ProviderUsage);
         stopwatch.Stop();
         var durationMs = (int)stopwatch.ElapsedMilliseconds;
@@ -286,7 +268,7 @@ internal sealed class TestCompletionService
         // token counts, cost, tool-call count, the prompt SHA-256 (NEVER the
         // prompt text) and the (model_name, base_url) correlation pair. Actor
         // role + IP ride on the row itself (M3T3 parity), not in metadata.
-        await _audit.LogAsync(
+        await audit.LogAsync(
             new AuditEvent(
                 ActorUserId: actor.UserId,
                 ActorRole: actor.Role,
@@ -301,7 +283,7 @@ internal sealed class TestCompletionService
                     prompt_tokens = tokens.PromptTokens,
                     completion_tokens = tokens.CompletionTokens,
                     total_tokens = tokens.EffectiveTotalTokens,
-                    cost_usd = cost,
+                    cost_usd = derivedCost,
                     tool_call_count = toolCalls.Count,
                     prompt_sha256 = promptHash,
                     model_name = entry.ModelName,
@@ -312,7 +294,7 @@ internal sealed class TestCompletionService
 
         // Success-only, credential-free log line (task Risks: the DoD unit
         // test scans ILogger invocations for the key / prompt substrings).
-        _logger.LogInformation(
+        logger.LogInformation(
             "Test completion for model {ModelId} by {ActorUserId} finished in {DurationMs} ms "
             + "with {ToolCallCount} tool call(s) and {PromptTokens} prompt tokens.",
             modelId, actor.UserId, durationMs, toolCalls.Count, tokens.PromptTokens);
@@ -324,7 +306,7 @@ internal sealed class TestCompletionService
             PromptTokens = tokens.PromptTokens,
             CompletionTokens = tokens.CompletionTokens,
             TotalTokens = tokens.EffectiveTotalTokens,
-            CostUsd = cost,
+            CostUsd = derivedCost,
             DurationMs = durationMs,
         };
     }
