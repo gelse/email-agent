@@ -6,18 +6,12 @@ namespace EmailAgent.Infrastructure.Plugins;
 /// load time only; there is deliberately no in-process runtime enforcement
 /// (Q-D3 assembly-level isolation for v1).
 /// </summary>
-public sealed class PluginCapabilityException : Exception
+public sealed class PluginCapabilityException(string message, string? pluginId = null) : Exception(message)
 {
-    public PluginCapabilityException(string message, string? pluginId = null)
-        : base(message)
-    {
-        PluginId = pluginId;
-    }
-
     /// <summary>
     /// The manifest's declared <c>plugin_id</c>, when known: the candidate has
     /// already passed the signature gate by the time validation runs, so the
     /// capability refusal can (and does) attribute its audit row to it.
     /// </summary>
-    public string? PluginId { get; }
+    public string? PluginId { get; } = pluginId;
 }

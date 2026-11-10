@@ -25,13 +25,10 @@ namespace EmailAgent.Api.Models;
 /// M3T6: the model is <c>enabled = false</c> — the endpoint refuses to call a
 /// disabled model (task error table → §13.12 400 <c>/errors/model-disabled</c>).
 /// </summary>
-public sealed class ModelDisabledException : Exception
+public sealed class ModelDisabledException(Guid modelId)
+    : Exception($"Model {modelId} is disabled — a test completion only runs against enabled models.")
 {
-    public ModelDisabledException(Guid modelId)
-        : base($"Model {modelId} is disabled — a test completion only runs against enabled models.")
-        => ModelId = modelId;
-
-    public Guid ModelId { get; }
+    public Guid ModelId { get; } = modelId;
 }
 
 /// <summary>
@@ -41,12 +38,9 @@ public sealed class ModelDisabledException : Exception
 /// <c>Bearer …</c> redacted, clamped to 256 UTF-8 bytes), so the handler can
 /// surface it verbatim without ever touching the raw provider body.
 /// </summary>
-public sealed class TestCompletionFailedException : Exception
+public sealed class TestCompletionFailedException(string detail) : Exception(detail)
 {
-    public TestCompletionFailedException(string detail)
-        : base(detail) => Detail = detail;
-
-    public string Detail { get; }
+    public string Detail { get; } = detail;
 }
 
 /// <summary>Everything one test-completion call needs after the model gates passed.</summary>

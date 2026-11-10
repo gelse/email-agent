@@ -1,9 +1,11 @@
 using System.Net;
 using System.Text;
 using Bunit;
+using EmailAgent.Spa.Actions;
 using EmailAgent.Spa.Auth;
 using EmailAgent.Spa.Models;
 using EmailAgent.Spa.Notifications;
+using EmailAgent.Spa.NotificationsApi;
 using EmailAgent.Spa.Sources;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -41,6 +43,9 @@ internal sealed class SpaTestContext : TestContext
         // M3T7: the /user/agents/new picker's typed client over the same stub
         // (Program.cs parity — one HttpClient, one transport per test).
         Services.AddScoped(sp => new UserModelsClient(sp.GetRequiredService<HttpClient>()));
+        // M4T4: actions + notifications clients over the same stub.
+        Services.AddScoped(sp => new ActionsClient(sp.GetRequiredService<HttpClient>()));
+        Services.AddScoped(sp => new NotificationsClient(sp.GetRequiredService<HttpClient>()));
     }
 
     /// <summary>The stub transport every page's injected HttpClient uses.</summary>

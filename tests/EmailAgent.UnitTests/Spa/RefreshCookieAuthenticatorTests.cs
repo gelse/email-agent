@@ -138,25 +138,17 @@ public class RefreshCookieAuthenticatorTests
             + $".{B64Url("{\"role\":\"User\"}")}.c2ln";
     }
 
-    private sealed class ResponderHandler : HttpMessageHandler
+    private sealed class ResponderHandler(Func<HttpResponseMessage> response) : HttpMessageHandler
     {
-        private readonly Func<HttpResponseMessage> _response;
-
-        public ResponderHandler(Func<HttpResponseMessage> response) => _response = response;
-
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(_response());
+            => Task.FromResult(response());
     }
 
-    private sealed class FixedClientFactory : IHttpClientFactory
+    private sealed class FixedClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
-        private readonly HttpMessageHandler _handler;
-
-        public FixedClientFactory(HttpMessageHandler handler) => _handler = handler;
-
         public HttpClient CreateClient(string name)
-            => new(_handler, disposeHandler: false)
+            => new(handler, disposeHandler: false)
             {
                 BaseAddress = new Uri("http://localhost/"),
             };

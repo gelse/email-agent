@@ -6,12 +6,12 @@ using EmailAgent.Infrastructure.Entities;
 namespace EmailAgent.Api.Sources;
 
 /// <summary>
-/// M2T5 / §13.13: the cursor codec and keyset predicate for the
-/// <c>/v1/user/sources</c> list. The payload is base64 of the plain
+/// M2T5 / §13.13: the cursor codec and keyset predicate for the M2–M5 list
+/// endpoints (<c>message_sources</c>; extended in M4T3 for <c>action_configs</c>
+/// and <c>user_notifications</c>, SQ-M4-6). The payload is base64 of the plain
 /// <c>{created_at:O}|{id}</c> pipe form — the v0 window the architecture
-/// reserves for the M2–M5 list endpoints before M6a's versioned-JSON
-/// retrofit (§13.13, SQ-M6a-12); the admin namespace keeps its own
-/// base64url-JSON codec in <see cref="Cursor"/>.
+/// reserves before M6a's versioned-JSON retrofit (§13.13, SQ-M6a-12); the admin
+/// namespace keeps its own base64url-JSON codec in <see cref="Cursor"/>.
 /// </summary>
 /// <remarks>
 /// The cursor is opaque and server-echoed: a strict decode maps any
@@ -114,13 +114,7 @@ public static class CursorPager
         IQueryable<MessageSource> query, string? cursor, int limit)
     {
         ArgumentNullException.ThrowIfNull(query);
-
-        if (limit < PaginationQuery.MinLimit || limit > PaginationQuery.MaxLimit)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(limit),
-                $"The page size must be between {PaginationQuery.MinLimit} and {PaginationQuery.MaxLimit}.");
-        }
+        ValidateLimit(limit);
 
         if (!string.IsNullOrEmpty(cursor))
         {
@@ -134,5 +128,57 @@ public static class CursorPager
             .OrderByDescending(source => source.CreatedAt)
             .ThenByDescending(source => source.Id)
             .Take(limit + 1);
+    }
+
+    /// <summary>M4T3 (SQ-M4-6): keyset window for <c>action_configs</c>.</summary>
+    public static IQueryable<ActionConfig> ApplyCursor(
+        IQueryable<ActionConfig> query, string? cursor, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ValidateLimit(limit);
+
+        if (!string.IsNullOrEmpty(cursor))
+        {
+            var (createdAt, id) = Decode(cursor);
+            query = query.Where(
+                row => row.CreatedAt < createdAt
+                    || (row.CreatedAt == createdAt && row.Id < id));
+        }
+
+        return query
+            .OrderByDescending(row => row.CreatedAt)
+            .ThenByDescending(row => row.Id)
+            .Take(limit + 1);
+    }
+
+    /// <summary>M4T3 (SQ-M4-6): keyset window for <c>user_notifications</c>.</summary>
+    public static IQueryable<UserNotification> ApplyCursor(
+        IQueryable<UserNotification> query, string? cursor, int limit)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ValidateLimit(limit);
+
+        if (!string.IsNullOrEmpty(cursor))
+        {
+            var (createdAt, id) = Decode(cursor);
+            query = query.Where(
+                row => row.CreatedAt < createdAt
+                    || (row.CreatedAt == createdAt && row.Id < id));
+        }
+
+        return query
+            .OrderByDescending(row => row.CreatedAt)
+            .ThenByDescending(row => row.Id)
+            .Take(limit + 1);
+    }
+
+    private static void ValidateLimit(int limit)
+    {
+        if (limit < PaginationQuery.MinLimit || limit > PaginationQuery.MaxLimit)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(limit),
+                $"The page size must be between {PaginationQuery.MinLimit} and {PaginationQuery.MaxLimit}.");
+        }
     }
 }

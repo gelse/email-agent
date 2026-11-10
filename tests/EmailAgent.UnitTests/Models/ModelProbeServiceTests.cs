@@ -481,12 +481,8 @@ public class ModelProbeServiceTests
     private static AgentDone Done(int promptTokens, int completionTokens) => new(promptTokens, completionTokens);
 
     /// <summary>A fake engine returning canned events — the probe's unit seam (no HTTP anywhere).</summary>
-    private sealed class FakeEngine : IAgentEngine
+    private sealed class FakeEngine(Func<AgentRequest, IReadOnlyList<AgentEvent>> events) : IAgentEngine
     {
-        private readonly Func<AgentRequest, IReadOnlyList<AgentEvent>> _events;
-
-        public FakeEngine(Func<AgentRequest, IReadOnlyList<AgentEvent>> events) => _events = events;
-
         public int Calls { get; private set; }
 
         public AgentRequest? LastRequest { get; private set; }
@@ -504,7 +500,7 @@ public class ModelProbeServiceTests
             Calls++;
             LastRequest = req;
             await Task.CompletedTask;
-            foreach (var evt in _events(req))
+            foreach (var evt in events(req))
             {
                 yield return evt;
             }

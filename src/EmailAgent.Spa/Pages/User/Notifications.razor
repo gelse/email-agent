@@ -1,0 +1,149 @@
+@page "/user/notifications"
+@attribute [Authorize(Roles = "User,Admin")]
+@using EmailAgent.Spa.NotificationsApi
+@inject NotificationsClient NotificationsApi
+@inject TokenStore TokenStore
+@inject JwtRoleParser RoleParser
+@inject NavigationManager Nav
+@inject ToastService Toasts
+
+@* M4T4: /user/notifications (Q-AC2) — unread badge, per-row mark-read, mark-all-read. *@
+<PageTitle>Notifications — Email Agent</PageTitle>
+
+@if (!_authorized) { }
+else
+{
+    <h1>Notifications @if (_unreadCount > 0) { <span class="badge" id="notifications-unread-badge">@_unreadCount unread</span> }</h1>
+
+    @if (_error is not null) { <div class="error-box" id="notifications-error" role="alert">@_error</div> }
+
+    <div class="toolbar">
+        <button type="button" class="btn-secondary" id="notifications-reload" disabled="@_loading" @onclick="() => LoadAsync()">Reload</button>
+        <button type="button" class="btn-secondary" id="notifications-mark-all-read" disabled="@(_loading || _unreadCount == 0)" @onclick="MarkAllReadAsync">Mark all read</button>
+    </div>
+
+    @if (_loading) { <p>Loading…</p> }
+    else if (!_loaded) { }
+    else if (_items.Count == 0)
+    {
+        @if (_error is null) { <p id="notifications-empty">No notifications.</p> }
+    }
+    else
+    {
+        <table class="notification-table" id="notifications-table">
+            <thead>
+                <tr>
+                    <th scope="col">Title</th>
+                    <th scope="col">Kind</th>
+                    <th scope="col">Created</th>
+                    <th scope="col">Status</th>
+                    <th scope="col"><span class="visually-hidden">Actions</span></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var n in _items)
+                {
+                    <tr @key="n.Id" class="@(n.ReadAt is null ? "notification-unread" : "notification-read")">
+                        <td>
+                            <div>@n.Title</div>
+                            @if (!string.IsNullOrWhiteSpace(n.Body)) { <div class="notification-body">@n.Body</div> }
+                        </td>
+                        <td>@n.Kind</td>
+                        <td>@FormatTime(n.CreatedAt)</td>
+                        <td>@(n.ReadAt is null ? "Unread" : "Read")</td>
+                        <td>
+                            @if (n.ReadAt is null)
+                            {
+                                <button type="button" class="btn-secondary" id="@ReadButtonId(n.Id)" @onclick="() => MarkReadAsync(n.Id)">Mark read</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    @if (!_loading && _nextCursor is not null)
+    {
+        <button type="button" class="btn-secondary" id="notifications-load-more" @onclick="LoadMoreAsync">Load more</button>
+    }
+}
+
+@code {
+    private bool _authorized;
+    private bool _loading;
+    private bool _loaded;
+    private List<NotificationDto> _items = new();
+    private string? _nextCursor;
+    private string? _error;
+    private int _unreadCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var token = TokenStore.AccessToken;
+        var roles = token is null ? Array.Empty<string>() : RoleParser.GetRoles(token);
+        if (!roles.Contains("User") && !roles.Contains("Admin")) { Nav.NavigateTo("/account/login"); return; }
+        _authorized = true;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; _error = null;
+        try
+        {
+            var page = await NotificationsApi.ListAsync(cursor: null);
+            _items = page.Items; _nextCursor = page.NextCursor; _loaded = true;
+            Recount();
+        }
+        catch (NotificationsApiException ex) when (ex.Status == System.Net.HttpStatusCode.Unauthorized) { Nav.NavigateTo("/account/login"); }
+        catch (NotificationsApiException ex) { _error = ex.Message; }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+        finally { _loading = false; }
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (string.IsNullOrEmpty(_nextCursor)) return;
+        _loading = true; _error = null;
+        try
+        {
+            var page = await NotificationsApi.ListAsync(cursor: _nextCursor);
+            _items.AddRange(page.Items); _nextCursor = page.NextCursor; _loaded = true;
+            Recount();
+        }
+        catch (NotificationsApiException ex) when (ex.Status == System.Net.HttpStatusCode.Unauthorized) { Nav.NavigateTo("/account/login"); }
+        catch (NotificationsApiException ex) { _error = ex.Message; }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+        finally { _loading = false; }
+    }
+
+    private async Task MarkReadAsync(Guid id)
+    {
+        try
+        {
+            var updated = await NotificationsApi.MarkReadAsync(id);
+            var idx = _items.FindIndex(n => n.Id == id);
+            if (idx >= 0) _items[idx] = updated;
+            Recount();
+        }
+        catch (NotificationsApiException ex) { _error = ex.Message; }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+    }
+
+    private async Task MarkAllReadAsync()
+    {
+        try
+        {
+            await NotificationsApi.MarkAllReadAsync();
+            await LoadAsync();
+        }
+        catch (NotificationsApiException ex) { _error = ex.Message; }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+    }
+
+    private void Recount() => _unreadCount = _items.Count(n => n.ReadAt is null);
+
+    private static string FormatTime(DateTimeOffset value) => value.ToLocalTime().ToString("g");
+    internal static string ReadButtonId(Guid id) => $"notification-read-{id:N}";
+}

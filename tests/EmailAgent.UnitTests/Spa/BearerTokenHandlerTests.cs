@@ -153,32 +153,23 @@ public class BearerTokenHandlerTests
     }
 
     /// <summary>Answers through the supplied function and counts every request it serves.</summary>
-    private sealed class CountingHandler : HttpMessageHandler
+    private sealed class CountingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
-
-        public CountingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
-            => _responder = responder;
-
         public int Calls { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Calls++;
-            return Task.FromResult(_responder(request));
+            return Task.FromResult(responder(request));
         }
     }
 
     /// <summary>One named client over the counting handler (Program.cs's "RefreshClient" stand-in).</summary>
-    private sealed class FixedClientFactory : IHttpClientFactory
+    private sealed class FixedClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
-        private readonly HttpMessageHandler _handler;
-
-        public FixedClientFactory(HttpMessageHandler handler) => _handler = handler;
-
         public HttpClient CreateClient(string name)
-            => new(_handler, disposeHandler: false)
+            => new(handler, disposeHandler: false)
             {
                 BaseAddress = new Uri("http://localhost/"),
             };

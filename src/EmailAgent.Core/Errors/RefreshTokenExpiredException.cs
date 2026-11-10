@@ -8,18 +8,12 @@ namespace EmailAgent.Core.Errors;
 /// <c>refresh_reuse_detected</c> audit row is written. M1T6 maps this type to
 /// RFC 7807 401 (client must re-authenticate).
 /// </summary>
-public sealed class RefreshTokenExpiredException : Exception
+public sealed class RefreshTokenExpiredException(Guid tokenId, DateTimeOffset expiresAt)
+    : Exception($"Refresh token {tokenId} expired at {expiresAt:O}; re-authentication is required.")
 {
-    public RefreshTokenExpiredException(Guid tokenId, DateTimeOffset expiresAt)
-        : base($"Refresh token {tokenId} expired at {expiresAt:O}; re-authentication is required.")
-    {
-        TokenId = tokenId;
-        ExpiresAt = expiresAt;
-    }
-
     /// <summary>The refresh token that was refused.</summary>
-    public Guid TokenId { get; }
+    public Guid TokenId { get; } = tokenId;
 
     /// <summary>The instant the token stopped being renewable.</summary>
-    public DateTimeOffset ExpiresAt { get; }
+    public DateTimeOffset ExpiresAt { get; } = expiresAt;
 }

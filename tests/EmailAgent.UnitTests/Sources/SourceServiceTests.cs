@@ -2,6 +2,7 @@ using System.Text.Json;
 using EmailAgent.Api.Sources;
 using EmailAgent.Contracts;
 using EmailAgent.Contracts.AgentEngines;
+using EmailAgent.Contracts.ActionHandlers;
 using EmailAgent.Contracts.MessageSources;
 using EmailAgent.Contracts.Schema;
 using EmailAgent.Core.Audit;
@@ -129,6 +130,9 @@ public class SourceServiceTests
         // one-slot-per-plugin, refusal-wins-visible surface exactly.
         private readonly Dictionary<string, IAgentEngine> _engines = new();
 
+        // M4T1: action-handler slot.
+        private readonly Dictionary<string, IActionHandler> _actionHandlers = new();
+
         public void RegisterMessageSource(string pluginId, IMessageSource source)
             => _sources[pluginId] = source;
 
@@ -145,14 +149,25 @@ public class SourceServiceTests
         public IAgentEngine? GetAgentEngine(string pluginId)
             => _engines.GetValueOrDefault(pluginId);
 
+        public void RegisterActionHandler(string pluginId, IActionHandler handler)
+            => _actionHandlers[pluginId] = handler;
+
+        public void UnregisterActionHandler(string pluginId) => _actionHandlers.Remove(pluginId);
+
+        public IActionHandler? GetActionHandler(string pluginId)
+            => _actionHandlers.GetValueOrDefault(pluginId);
+
         public IReadOnlyCollection<string> MessageSourceIds => _sources.Keys;
 
         public IReadOnlyCollection<string> AgentEngineIds => _engines.Keys;
+
+        public IReadOnlyCollection<string> ActionHandlerIds => _actionHandlers.Keys;
 
         public void Clear()
         {
             _sources.Clear();
             _engines.Clear();
+            _actionHandlers.Clear();
         }
     }
 

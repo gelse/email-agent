@@ -17,6 +17,12 @@ public class EmailAgentDbContext : DbContext
     {
     }
 
+    /// <summary>Non-generic overload for derived test contexts (e.g. InMemory).</summary>
+    protected EmailAgentDbContext(DbContextOptions options)
+        : base(options)
+    {
+    }
+
     public DbSet<User> Users => Set<User>();
 
     public DbSet<OneTimePassword> OneTimePasswords => Set<OneTimePassword>();

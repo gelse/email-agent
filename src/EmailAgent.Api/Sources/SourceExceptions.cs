@@ -40,24 +40,19 @@ public static class SourceErrors
 /// cross-user case raises this too — a foreign id must be indistinguishable
 /// from an unknown one (no existence oracle; task Risks).
 /// </summary>
-public sealed class SourceNotFoundException : Exception
+public sealed class SourceNotFoundException(Guid sourceId) : Exception($"No message source with id {sourceId}.")
 {
-    public SourceNotFoundException(Guid sourceId)
-        : base($"No message source with id {sourceId}.") => SourceId = sourceId;
-
-    public Guid SourceId { get; }
+    public Guid SourceId { get; } = sourceId;
 }
 
 /// <summary>
 /// <c>message_sources.type_id</c> names a plugin the registry does not hold
 /// (never loaded, or dropped by a SIGHUP reload).
 /// </summary>
-public sealed class PluginNotRegisteredException : Exception
+public sealed class PluginNotRegisteredException(string typeId)
+    : Exception($"No message-source plugin is registered under '{typeId}'.")
 {
-    public PluginNotRegisteredException(string typeId)
-        : base($"No message-source plugin is registered under '{typeId}'.") => TypeId = typeId;
-
-    public string TypeId { get; }
+    public string TypeId { get; } = typeId;
 }
 
 /// <summary>
@@ -69,20 +64,13 @@ public sealed class PluginNotRegisteredException : Exception
 /// (<c>port: -1</c> → <c>must be between 1 and 65535</c>), which it can only
 /// do when the exception carries it.
 /// </summary>
-public sealed class ConfigValidationException : Exception
+public sealed class ConfigValidationException(string? error, IReadOnlyList<ValidationIssue> issues, JsonSchema schema)
+    : Exception(string.IsNullOrWhiteSpace(error) ? "The source configuration is invalid." : error)
 {
-    public ConfigValidationException(
-        string? error, IReadOnlyList<ValidationIssue> issues, JsonSchema schema)
-        : base(string.IsNullOrWhiteSpace(error) ? "The source configuration is invalid." : error)
-    {
-        Issues = issues ?? throw new ArgumentNullException(nameof(issues));
-        Schema = schema ?? throw new ArgumentNullException(nameof(schema));
-    }
-
-    public IReadOnlyList<ValidationIssue> Issues { get; }
+    public IReadOnlyList<ValidationIssue> Issues { get; } = issues ?? throw new ArgumentNullException(nameof(issues));
 
     /// <summary>The plugin's <c>ConfigSchema</c> the issues were raised against.</summary>
-    public JsonSchema Schema { get; }
+    public JsonSchema Schema { get; } = schema ?? throw new ArgumentNullException(nameof(schema));
 }
 
 /// <summary>
@@ -92,13 +80,11 @@ public sealed class ConfigValidationException : Exception
 /// KEK), so an unauthenticating unwrap is the only signal — §13.12 400
 /// <c>/errors/dek-invalid</c>, never a 500.
 /// </summary>
-public sealed class DekInvalidException : Exception
+public sealed class DekInvalidException(Guid blobId, Exception innerException) : Exception(
+    "The supplied data-encryption key does not open this source's configuration.",
+    innerException)
 {
-    public DekInvalidException(Guid blobId, Exception innerException)
-        : base("The supplied data-encryption key does not open this source's configuration.",
-            innerException) => BlobId = blobId;
-
-    public Guid BlobId { get; }
+    public Guid BlobId { get; } = blobId;
 }
 
 /// <summary>
@@ -107,12 +93,10 @@ public sealed class DekInvalidException : Exception
 /// integrity violation, not a client error — §13.12
 /// <c>/errors/internal-blob-missing</c>.
 /// </summary>
-public sealed class InternalBlobMissingException : Exception
+public sealed class InternalBlobMissingException(Guid blobId, string reason)
+    : Exception($"Encrypted blob {blobId} cannot be read: {reason}.")
 {
-    public InternalBlobMissingException(Guid blobId, string reason)
-        : base($"Encrypted blob {blobId} cannot be read: {reason}.") => BlobId = blobId;
-
-    public Guid BlobId { get; }
+    public Guid BlobId { get; } = blobId;
 }
 
 /// <summary>
@@ -124,13 +108,10 @@ public sealed class InternalBlobMissingException : Exception
 /// task's documented §13.12 <c>/errors/source-connection-failed</c> 500
 /// rather than the generic <c>/errors/internal</c>.
 /// </summary>
-public sealed class SourceConnectionFailedException : Exception
+public sealed class SourceConnectionFailedException(string typeId, Exception innerException)
+    : Exception($"The connection test for '{typeId}' failed unexpectedly.", innerException)
 {
-    public SourceConnectionFailedException(string typeId, Exception innerException)
-        : base($"The connection test for '{typeId}' failed unexpectedly.", innerException)
-        => TypeId = typeId;
-
-    public string TypeId { get; }
+    public string TypeId { get; } = typeId;
 }
 
 /// <summary>
@@ -140,11 +121,8 @@ public sealed class SourceConnectionFailedException : Exception
 /// constraint surface as a 500; the processed rows are retained per Q-O15
 /// (relaxing the FK is a separate, auditable decision deferred to M6aT7).
 /// </summary>
-public sealed class SourceHasMessagesException : Exception
+public sealed class SourceHasMessagesException(Guid sourceId)
+    : Exception($"Source {sourceId} still has processed messages and cannot be deleted.")
 {
-    public SourceHasMessagesException(Guid sourceId)
-        : base($"Source {sourceId} still has processed messages and cannot be deleted.")
-        => SourceId = sourceId;
-
-    public Guid SourceId { get; }
+    public Guid SourceId { get; } = sourceId;
 }

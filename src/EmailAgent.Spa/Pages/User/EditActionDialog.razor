@@ -1,0 +1,266 @@
+@using EmailAgent.Contracts.Schema
+@using EmailAgent.Spa.Actions
+@using System.Text.Json
+@inject ActionsClient ActionsApi
+@inject ToastService Toasts
+
+@* M4T4: hand-written add/edit dialog (Q-F4). SMTP fields are manual (Q-C4);
+   required flags via JsonSchemaIntrospector on ImapActionConfigSchema. *@
+<div class="modal-backdrop">
+    <div class="modal action-dialog" role="dialog" aria-modal="true"
+         aria-label="@(ActionId is null ? "Add action" : "Edit action")">
+        <h2>@(ActionId is null ? "Add action" : "Edit action")</h2>
+
+        @if (_loading)
+        {
+            <p>Loading…</p>
+        }
+        else
+        {
+            @if (_error is not null)
+            {
+                <div class="error-box" id="action-error" role="alert">@_error</div>
+            }
+
+            <div class="form-field">
+                <label for="action-display-name">Display name</label>
+                <input id="action-display-name" class="form-control" @bind="_displayName" />
+                @FieldError("display_name")
+            </div>
+
+            <div class="form-field">
+                <label for="action-type">Type</label>
+                <select id="action-type" class="form-control" @bind="_typeId" disabled="@(ActionId is not null)">
+                    <option value="imap-reply">imap-reply</option>
+                    <option value="imap-forward">imap-forward</option>
+                </select>
+                @FieldError("type_id")
+                <span class="hint">M4 ships imap-reply and imap-forward.</span>
+            </div>
+
+            <div class="form-field form-check">
+                <label for="action-require-confirmation">Require confirmation before send</label>
+                <input id="action-require-confirmation" type="checkbox" @bind="_requireConfirmation" />
+            </div>
+
+            <div class="form-field form-check">
+                <label for="action-dry-run-default">Dry run by default</label>
+                <input id="action-dry-run-default" type="checkbox" @bind="_dryRunDefault" />
+            </div>
+
+            <h3>SMTP configuration</h3>
+            <span class="hint">Entered manually (never derived from any IMAP source).</span>
+
+            <div class="form-field">
+                <label for="action-host">Host</label>
+                <input id="action-host" class="form-control" @bind="_host" />
+                @FieldError("host")
+            </div>
+
+            <div class="form-field">
+                <label for="action-port">Port</label>
+                <input id="action-port" class="form-control" type="number" min="1" max="65535" @bind="_port" />
+                @FieldError("port")
+            </div>
+
+            <div class="form-field form-check">
+                <label for="action-use-ssl">Use SSL</label>
+                <input id="action-use-ssl" type="checkbox" @bind="_useSsl" />
+            </div>
+
+            <div class="form-field">
+                <label for="action-username">Username</label>
+                <input id="action-username" class="form-control" @bind="_username" />
+                @FieldError("username")
+            </div>
+
+            <div class="form-field">
+                <label for="action-password">Password</label>
+                <input id="action-password" type="password" class="form-control" @bind="_password" autocomplete="new-password" />
+                @FieldError("password")
+                <span class="hint" id="action-password-note">
+                    @(ActionId is null ? "Required — the action cannot send without it." : "Leave blank to keep the stored password.")
+                </span>
+            </div>
+
+            <div class="form-field">
+                <label for="action-from-address">From address</label>
+                <input id="action-from-address" class="form-control" @bind="_fromAddress" />
+                @FieldError("from_address")
+            </div>
+
+            <div class="form-field">
+                <label for="action-from-name">From name</label>
+                <input id="action-from-name" class="form-control" @bind="_fromName" />
+                @FieldError("from_name")
+            </div>
+
+            <div class="modal-actions">
+                <button type="button" class="btn-primary" id="action-save" disabled="@(_busy || _gone)" @onclick="SaveAsync">
+                    @(_busy ? "Saving…" : "Save")
+                </button>
+                <button type="button" class="btn-secondary" id="action-cancel" disabled="@_busy" @onclick="OnCancel">Cancel</button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public Guid? ActionId { get; set; }
+    [Parameter, EditorRequired] public EventCallback OnCancel { get; set; }
+    [Parameter, EditorRequired] public EventCallback<ActionConfigDto> OnSaved { get; set; }
+
+    private static readonly HashSet<string> KnownFieldNames = new(StringComparer.Ordinal)
+    {
+        "display_name", "type_id", "config", "host", "port", "use_ssl", "username", "password", "from_address", "from_name",
+    };
+
+    private string _displayName = string.Empty;
+    private string _typeId = "imap-reply";
+    private bool _requireConfirmation = true;
+    private bool _dryRunDefault;
+    private string _host = string.Empty;
+    private string _port = "587";
+    private bool _useSsl;
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string _fromAddress = string.Empty;
+    private string _fromName = string.Empty;
+
+    private readonly Dictionary<string, string> _fieldErrors = new(StringComparer.Ordinal);
+    private string? _error;
+    private bool _loading;
+    private bool _busy;
+    private bool _gone;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (ActionId is not { } id) return;
+        _loading = true;
+        try
+        {
+            var row = await ActionsApi.GetAsync(id);
+            _displayName = row.DisplayName;
+            _typeId = row.TypeId;
+            _requireConfirmation = row.RequireConfirmation;
+            _dryRunDefault = row.DryRunDefault;
+            ReadConfig(row.Config);
+            _password = string.Empty;
+        }
+        catch (ActionsApiException ex) when (ex.Status == System.Net.HttpStatusCode.NotFound)
+        {
+            _gone = true;
+            _error = "This action no longer exists. Close this dialog to see the current list.";
+        }
+        catch (ActionsApiException ex) { _error = ex.Message; }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+        finally { _loading = false; }
+    }
+
+    private void ReadConfig(JsonElement config)
+    {
+        if (config.ValueKind != JsonValueKind.Object) return;
+        if (config.TryGetProperty("host", out var v) && v.ValueKind == JsonValueKind.String) _host = v.GetString() ?? "";
+        if (config.TryGetProperty("port", out v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var p)) _port = p.ToString();
+        if (config.TryGetProperty("use_ssl", out v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)) _useSsl = v.GetBoolean();
+        if (config.TryGetProperty("username", out v) && v.ValueKind == JsonValueKind.String) _username = v.GetString() ?? "";
+        if (config.TryGetProperty("from_address", out v) && v.ValueKind == JsonValueKind.String) _fromAddress = v.GetString() ?? "";
+        if (config.TryGetProperty("from_name", out v) && v.ValueKind == JsonValueKind.String) _fromName = v.GetString() ?? "";
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        if (!Validate(requirePassword: ActionId is null)) return;
+
+        _busy = true;
+        try
+        {
+            if (ActionId is not { } id)
+            {
+                var created = await ActionsApi.CreateAsync(new CreateActionRequest
+                {
+                    TypeId = _typeId, DisplayName = _displayName.Trim(),
+                    RequireConfirmation = _requireConfirmation, DryRunDefault = _dryRunDefault,
+                    Config = BuildConfig(),
+                });
+                await OnSaved.InvokeAsync(created);
+            }
+            else
+            {
+                var updated = await ActionsApi.UpdateAsync(id, new UpdateActionRequest
+                {
+                    DisplayName = _displayName.Trim(),
+                    RequireConfirmation = _requireConfirmation, DryRunDefault = _dryRunDefault,
+                    Config = BuildConfig(),
+                });
+                await OnSaved.InvokeAsync(updated);
+            }
+        }
+        catch (ActionsApiException ex) { ApplyProblem(ex); }
+        catch (HttpRequestException) { _error = "Could not reach the API."; }
+        finally { _busy = false; }
+    }
+
+    private bool Validate(bool requirePassword)
+    {
+        _fieldErrors.Clear();
+        if (string.IsNullOrWhiteSpace(_displayName)) _fieldErrors["display_name"] = "Display name is required.";
+        if (!int.TryParse(_port?.Trim(), out var port) || port < 1 || port > 65535) _fieldErrors["port"] = "Port must be between 1 and 65535.";
+
+        foreach (var field in JsonSchemaIntrospector.ListFields(ImapActionConfigSchema.Build()))
+        {
+            if (!field.Required) continue;
+            if (field.Name == "password" && !requirePassword) continue;
+            var ok = field.Name switch
+            {
+                "host" => !string.IsNullOrWhiteSpace(_host),
+                "username" => !string.IsNullOrWhiteSpace(_username),
+                "password" => !string.IsNullOrWhiteSpace(_password),
+                "from_address" => !string.IsNullOrWhiteSpace(_fromAddress),
+                _ => true,
+            };
+            if (!ok) _fieldErrors[field.Name] = Label(field.Name) + " is required.";
+        }
+        return _fieldErrors.Count == 0;
+    }
+
+    private void ApplyProblem(ActionsApiException exception)
+    {
+        var mapped = 0;
+        foreach (var entry in exception.FieldErrors)
+        {
+            if (entry.Name is not null && KnownFieldNames.Contains(entry.Name))
+            {
+                _fieldErrors[entry.Name] = entry.Reason ?? string.Empty;
+                mapped++;
+            }
+        }
+        if (mapped == 0) _error = exception.Message;
+    }
+
+    private Dictionary<string, object?> BuildConfig() => new(StringComparer.Ordinal)
+    {
+        ["host"] = _host.Trim(),
+        ["port"] = int.TryParse(_port?.Trim(), out var p) ? p : 587,
+        ["use_ssl"] = _useSsl,
+        ["username"] = _username.Trim(),
+        ["password"] = _password ?? string.Empty,
+        ["from_address"] = _fromAddress.Trim(),
+        ["from_name"] = string.IsNullOrWhiteSpace(_fromName) ? null : _fromName.Trim(),
+    };
+
+    private MarkupString FieldError(string name)
+        => _fieldErrors.TryGetValue(name, out var reason)
+            ? new MarkupString($"<div class=\"validation-message\" id=\"error-{name}\">{System.Net.WebUtility.HtmlEncode(reason)}</div>")
+            : default;
+
+    private static string Label(string name) => name switch
+    {
+        "from_address" => "From address",
+        "from_name" => "From name",
+        "display_name" => "Display name",
+        "use_ssl" => "Use SSL",
+        _ => char.ToUpperInvariant(name[0]) + name[1..],
+    };
+}

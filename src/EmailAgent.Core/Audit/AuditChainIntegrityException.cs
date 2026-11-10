@@ -6,14 +6,9 @@ namespace EmailAgent.Core.Audit;
 /// carry row content — operators run <c>tools/AuditVerify</c> (M1T9) for the
 /// report.
 /// </summary>
-public sealed class AuditChainIntegrityException : Exception
+public sealed class AuditChainIntegrityException(long firstBadId)
+    : Exception($"Audit HMAC chain mismatch at audit_log.id {firstBadId}.")
 {
-    public AuditChainIntegrityException(long firstBadId)
-        : base($"Audit HMAC chain mismatch at audit_log.id {firstBadId}.")
-    {
-        FirstBadId = firstBadId;
-    }
-
     /// <summary>The id of the first row whose recomputed HMAC does not match.</summary>
-    public long FirstBadId { get; }
+    public long FirstBadId { get; } = firstBadId;
 }
