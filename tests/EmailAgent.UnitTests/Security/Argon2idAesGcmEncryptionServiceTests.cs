@@ -402,7 +402,7 @@ public class Argon2idAesGcmEncryptionServiceTests
         foreach (var (label, key) in cases)
         {
             var services = new ServiceCollection();
-            var values = new Dictionary<string, string?>();
+            Dictionary<string, string?> values = [];
             if (key is not null)
             {
                 values["System:KeyEncryptionKey"] = key;

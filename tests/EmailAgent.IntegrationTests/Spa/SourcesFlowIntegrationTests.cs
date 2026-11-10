@@ -42,7 +42,8 @@ namespace EmailAgent.IntegrationTests.Spa;
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class SourcesFlowIntegrationTests : IClassFixture<GreenMailFixture>
+public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixture greenmail)
+    : IClassFixture<GreenMailFixture>
 {
     /// <summary>The passphrase the REAL key material of the unlock facts is wrapped under.</summary>
     private const string FlowPassphrase = "m2t6-flow-passphr4se";
@@ -54,15 +55,6 @@ public class SourcesFlowIntegrationTests : IClassFixture<GreenMailFixture>
 
     /// <summary>Same-origin dev origin (nginx serves SPA + API — §13.9).</summary>
     private static readonly Uri BaseAddress = new("http://localhost:8081/");
-
-    private readonly PostgresFixture _postgres;
-    private readonly GreenMailFixture _greenmail;
-
-    public SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixture greenmail)
-    {
-        _postgres = postgres;
-        _greenmail = greenmail;
-    }
 
     // -----------------------------------------------------------------------
     // R2: unlock prompt -> real unwrap -> table, header semantics in between.
@@ -79,7 +71,7 @@ public class SourcesFlowIntegrationTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task SourcesFlow_UnlockPrompt_ThenTable_ThroughRealUnwrapDek()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         var userId = await AdminTestHost.SeedUserAsync(
             factory, SourcesTestHost.UniqueEmail("m2t6-unlock"));
@@ -176,11 +168,11 @@ public class SourcesFlowIntegrationTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task SourcesFlow_Add_Test_Fetch_ThenConflictDelete_ThroughRealApi()
     {
-        await _greenmail.PurgeMailAsync();
-        await _greenmail.SendAsync("m2t6 flow message 1", "first body");
-        await _greenmail.SendAsync("m2t6 flow message 2", "second body");
+        await greenmail.PurgeMailAsync();
+        await greenmail.SendAsync("m2t6 flow message 1", "first body");
+        await greenmail.SendAsync("m2t6 flow message 2", "second body");
 
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         var userId = await AdminTestHost.SeedUserAsync(
             factory, SourcesTestHost.UniqueEmail("m2t6-flow"));
@@ -213,8 +205,8 @@ public class SourcesFlowIntegrationTests : IClassFixture<GreenMailFixture>
             () => page.Find("#source-display-name").Should().NotBeNull(
                 "the add dialog renders its form as soon as it is opened"), Wait);
         page.Find("#source-display-name").Change("greenmail inbox");
-        page.Find("#source-host").Change(_greenmail.ImapHost);
-        page.Find("#source-port").Change(_greenmail.ImapPort.ToString());
+        page.Find("#source-host").Change(greenmail.ImapHost);
+        page.Find("#source-port").Change(greenmail.ImapPort.ToString());
         page.Find("#source-use-ssl").Change(false); // 3143 speaks plaintext IMAP
         page.Find("#source-username").Change(GreenMailFixture.Username);
         page.Find("#source-password").Change(GreenMailFixture.Password);
@@ -334,7 +326,7 @@ public class SourcesFlowIntegrationTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task SourcesFlow_Delete_RemovesRow_AndShowsEmptyState()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         var userId = await AdminTestHost.SeedUserAsync(
             factory, SourcesTestHost.UniqueEmail("m2t6-delete"));
@@ -506,7 +498,7 @@ public class SourcesFlowIntegrationTests : IClassFixture<GreenMailFixture>
             string? Authorization,
             string? DekHeader);
 
-        private readonly List<RecordedCall> _calls = new();
+        private readonly List<RecordedCall> _calls = [];
 
         public IReadOnlyList<RecordedCall> Calls
         {
@@ -514,7 +506,7 @@ public class SourcesFlowIntegrationTests : IClassFixture<GreenMailFixture>
             {
                 lock (_calls)
                 {
-                    return _calls.ToArray();
+                    return [.. _calls];
                 }
             }
         }

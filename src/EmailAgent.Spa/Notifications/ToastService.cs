@@ -29,7 +29,7 @@ public sealed class ToastService
     /// <summary>Success/info lifetime (5 s per the task's Risks bullet).</summary>
     public const int AutoDismissMilliseconds = 5000;
 
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly List<ToastItem> _toasts = new();
 
     /// <summary>Raised after every add or dismissal (from an arbitrary thread).</summary>

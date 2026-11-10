@@ -1,0 +1,158 @@
+@page "/user/agents/new"
+@attribute [Authorize(Roles = "User, Admin")]
+@inject UserModelsClient UserModelsApi
+@inject TokenStore TokenStore
+@inject JwtRoleParser RoleParser
+@inject NavigationManager Nav
+
+@* M3T7 / SQ-M3-6: the user-side STUB agent-config page. It exists to satisfy
+   exit criterion 1's "a user can select it in a stub agent config": the
+   picker calls GET /v1/user/models?limit=100, renders the display_name of
+   every row the server allow-listed (enabled AND probe Pass — the SPA never
+   filters for itself), and acknowledges the choice in the URL hash
+   (#model=<id>) so M5/M6a's real agent-config CRUD can pick it up later.
+
+   There is deliberately NO save button: PUT /v1/user/sources/{id}/agent
+   lands in M5/M6a, and a save control with nothing to call would be a lie.
+
+   Order of gates: the client-side role check on the JWT (routing source of
+   truth in the SPA), then the load — unlike /user/sources this page needs no
+   DEK gate, because the reduced DTO carries no encrypted material. *@
+<PageTitle>New agent — Email Agent</PageTitle>
+
+@if (!_authorized)
+{
+    @* Role gate failed: OnInitializedAsync is already navigating to login. *@
+}
+else
+{
+    <h1>New agent</h1>
+
+    @if (_error is not null)
+    {
+        <div class="error-box" id="agent-new-error" role="alert">@_error</div>
+    }
+
+    @if (_loading)
+    {
+        <p>Loading…</p>
+    }
+    else if (!_loaded)
+    {
+        @* The first page never arrived (429, transport, 500): the error box
+           above is the whole content — neither the empty state nor the picker
+           may render next to a load failure (the Pages/Admin/Models.razor
+           rule, so a failed fetch can never read as "no models exist"). *@
+    }
+    else if (_models.Count == 0)
+    {
+        @* An allow-list of zero is a real state (nothing enabled + Pass yet):
+           render the explanation instead of an empty dropdown that would look
+           selectable. *@
+        <p id="agent-new-empty">No models are available yet. Ask an administrator to add one.</p>
+    }
+    else
+    {
+        <div class="form-group">
+            <label for="agent-model-picker">Model</label>
+            <select id="agent-model-picker" class="form-control" @onchange="OnModelSelected">
+                <option value="">Select a model…</option>
+                @foreach (var model in _models)
+                {
+                    <option value="@model.Id" selected="@(_selectedId == model.Id)">@model.DisplayName</option>
+                }
+            </select>
+        </div>
+    }
+
+    @* Task-mandated wording: the stub has no save action, and the hash is
+       where the current selection lives for the future CRUD. *@
+    <p id="agent-new-no-save">Save action lands in M5. The selected model id is in the URL hash for future use.</p>
+}
+
+@code {
+    private bool _authorized;
+    private bool _loading = true;
+
+    /// <summary>
+    /// True only after a load has SUCCEEDED — it gates the empty state, so a
+    /// failed fetch renders the error box alone (mirror of Models.razor).
+    /// </summary>
+    private bool _loaded;
+
+    private string? _error;
+    private List<UserModelDto> _models = new();
+    private Guid? _selectedId;
+
+    /// <summary>
+    /// Role gate first (User or Admin — the JWT claim decides, no API call for
+    /// routing), then the one read the page exists for.
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        var token = TokenStore.AccessToken;
+        var roles = token is null
+            ? Array.Empty<string>()
+            : RoleParser.GetRoles(token);
+        if (!roles.Contains("User") && !roles.Contains("Admin"))
+        {
+            Nav.NavigateTo("/account/login");
+            return;
+        }
+
+        _authorized = true;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        _loaded = false;
+        try
+        {
+            var models = await UserModelsApi.ListAsync(100);
+            _models = models.ToList();
+            _loaded = true;
+        }
+        catch (ModelsApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (ModelsApiException ex)
+        {
+            // 403 (disabled account / role drift) stays inline: bouncing an
+            // authenticated Admin off a strict "User" group would hide the cause.
+            _error = ex.Status == HttpStatusCode.Forbidden
+                ? $"You are not allowed to view models. {ex.Message}"
+                : ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>
+    /// Records the pick in the page's own state and acknowledges it in the URL
+    /// hash — <c>forceLoad: false</c> keeps this a client-side navigation, so
+    /// the selection never costs a page reload or a second API call.
+    /// </summary>
+    private void OnModelSelected(ChangeEventArgs args)
+    {
+        if (!Guid.TryParse(args.Value?.ToString(), out var modelId))
+        {
+            // The placeholder option ("") and any malformed value mean
+            // "nothing selected" — never navigate to a bogus hash.
+            _selectedId = null;
+            return;
+        }
+
+        _selectedId = modelId;
+        Nav.NavigateTo($"/user/agents/new#model={modelId}", forceLoad: false);
+    }
+}

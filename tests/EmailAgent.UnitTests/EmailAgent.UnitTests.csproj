@@ -40,6 +40,9 @@
     <!-- M2T4: ImapConfig + ImapMessageSource pure-logic tests (internal seam via
          InternalsVisibleTo). -->
     <ProjectReference Include="../../src/EmailAgent.Connectors.Imap/EmailAgent.Connectors.Imap.csproj" />
+    <!-- M3T1: OpenAICompatibleConfig + request-builder/SSE/mapper tests (internal seam
+         via InternalsVisibleTo). -->
+    <ProjectReference Include="../../src/EmailAgent.Connectors.OpenAI/EmailAgent.Connectors.OpenAI.csproj" />
     <ProjectReference Include="../../src/EmailAgent.Infrastructure/EmailAgent.Infrastructure.csproj" />
     <!-- M1T8: bUnit mounts the SPA pages directly. -->
     <ProjectReference Include="../../src/EmailAgent.Spa/EmailAgent.Spa.csproj" />

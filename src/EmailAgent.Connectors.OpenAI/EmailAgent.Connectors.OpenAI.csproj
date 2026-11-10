@@ -1,10 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    M2T3: DEFAULT OpenAI-compatible connector STUB. It exists so the build
-    graph compiles and the DefaultTrustAnchor load path is exercised; the real
-    implementation lands in M3. See EmailAgent.Connectors.Imap.csproj for the
-    byte-identity rationale of the four properties below (CI=Debug,
-    local gates=Release, one pinned sha256).
+    M3T1: the DEFAULT OpenAI-compatible AGENT ENGINE plugin (replaces M2T3's
+    stub). See EmailAgent.Connectors.Imap.csproj for the byte-identity
+    rationale of the four properties below (CI=Debug, local gates=Release, one
+    pinned sha256 in DefaultTrustAnchor).
   -->
 
   <PropertyGroup>
@@ -20,5 +19,22 @@
 
   <ItemGroup>
     <EmbeddedResource Include="plugin.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      M3T1: the internal test seam (internal OpenAICompatibleConfig) reaches
+      the suites the same way M2T4's ImapConfig does. System.Net.Http.Json is
+      deliberately NOT referenced: it is inbox in net10.0 and nothing in this
+      plugin needs its extension methods (JSON bodies go through
+      StringContent + the shared OpenAIJsonOptions instance).
+      M3T2 (deviation D2): EmailAgent.Api joins the friend list — the probe
+      interface IModelProbeService takes the internal OpenAICompatibleConfig,
+      so naming the type in the Api layer requires internal visibility; the
+      type itself stays internal (CS0051 keeps the seam out of public APIs).
+    -->
+    <InternalsVisibleTo Include="EmailAgent.Api" />
+    <InternalsVisibleTo Include="EmailAgent.UnitTests" />
+    <InternalsVisibleTo Include="EmailAgent.IntegrationTests" />
   </ItemGroup>
 </Project>

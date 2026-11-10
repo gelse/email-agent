@@ -98,14 +98,9 @@ public sealed class SourcesApiException : Exception
 /// <see cref="HttpRequestException"/> for the caller's "could not reach the
 /// API" message.
 /// </summary>
-public sealed class SourcesClient
+public sealed class SourcesClient(HttpClient api)
 {
-    private readonly HttpClient _api;
 
-    public SourcesClient(HttpClient api)
-    {
-        _api = api ?? throw new ArgumentNullException(nameof(api));
-    }
 
     /// <summary><c>GET /v1/user/sources</c> — one keyset page (§13.13).</summary>
     public async Task<SourceListResponse> ListAsync(string? cursor, int limit = 25)
@@ -116,7 +111,7 @@ public sealed class SourcesClient
             url += $"&cursor={Uri.EscapeDataString(cursor)}";
         }
 
-        using var response = await _api.GetAsync(url).ConfigureAwait(false);
+        using var response = await api.GetAsync(url).ConfigureAwait(false);
         return await ReadAsync<SourceListResponse>(response).ConfigureAwait(false);
     }
 
@@ -127,7 +122,7 @@ public sealed class SourcesClient
     /// </summary>
     public async Task<SourceDto> GetAsync(Guid id)
     {
-        using var response = await _api.GetAsync($"/v1/user/sources/{id}").ConfigureAwait(false);
+        using var response = await api.GetAsync($"/v1/user/sources/{id}").ConfigureAwait(false);
         return await ReadAsync<SourceDto>(response).ConfigureAwait(false);
     }
 
@@ -135,7 +130,7 @@ public sealed class SourcesClient
     public async Task<SourceDto> CreateAsync(CreateSourceRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var response = await _api.PostAsJsonAsync("/v1/user/sources", request)
+        using var response = await api.PostAsJsonAsync("/v1/user/sources", request)
             .ConfigureAwait(false);
         return await ReadAsync<SourceDto>(response).ConfigureAwait(false);
     }
@@ -152,7 +147,7 @@ public sealed class SourcesClient
     public async Task<SourceDto> UpdateAsync(Guid id, UpdateSourceRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var response = await _api.PatchAsJsonAsync($"/v1/user/sources/{id}", request)
+        using var response = await api.PatchAsJsonAsync($"/v1/user/sources/{id}", request)
             .ConfigureAwait(false);
         return await ReadAsync<SourceDto>(response).ConfigureAwait(false);
     }
@@ -160,7 +155,7 @@ public sealed class SourcesClient
     /// <summary><c>DELETE /v1/user/sources/{id}</c> → 204.</summary>
     public async Task DeleteAsync(Guid id)
     {
-        using var response = await _api.DeleteAsync($"/v1/user/sources/{id}").ConfigureAwait(false);
+        using var response = await api.DeleteAsync($"/v1/user/sources/{id}").ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw await SourcesApiException.CreateAsync(response).ConfigureAwait(false);
@@ -176,7 +171,7 @@ public sealed class SourcesClient
     public async Task<TestConnectionResponse> TestConnectionAsync(TestConnectionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var response = await _api.PostAsJsonAsync("/v1/user/sources/test-connection", request)
+        using var response = await api.PostAsJsonAsync("/v1/user/sources/test-connection", request)
             .ConfigureAwait(false);
         return await ReadAsync<TestConnectionResponse>(response).ConfigureAwait(false);
     }
@@ -184,7 +179,7 @@ public sealed class SourcesClient
     /// <summary><c>POST /v1/user/sources/{id}/fetch-now</c> → the counts plus the advanced checkpoint.</summary>
     public async Task<FetchNowResponse> FetchNowAsync(Guid id)
     {
-        using var response = await _api.PostAsync(
+        using var response = await api.PostAsync(
             $"/v1/user/sources/{id}/fetch-now", new ByteArrayContent(Array.Empty<byte>()))
             .ConfigureAwait(false);
         return await ReadAsync<FetchNowResponse>(response).ConfigureAwait(false);

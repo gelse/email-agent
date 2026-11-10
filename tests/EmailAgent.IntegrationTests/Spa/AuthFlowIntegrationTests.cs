@@ -31,19 +31,15 @@ namespace EmailAgent.IntegrationTests.Spa;
 /// allowance does).
 /// </summary>
 [Collection("Postgres")]
-public class AuthFlowIntegrationTests
+public class AuthFlowIntegrationTests(PostgresFixture postgres)
 {
     /// <summary>Same-origin dev origin (nginx serves SPA + API — §13.9).</summary>
     private static readonly Uri BaseAddress = new("http://localhost:8081/");
 
-    private readonly PostgresFixture _postgres;
-
-    public AuthFlowIntegrationTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task AuthFlow_Login_CreateUser_OtpLogin_ChangePassword_SetPassphrase_Dashboard_Logout()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         await AdminTestHost.EnsureRolesAsync(factory);
 
@@ -293,7 +289,7 @@ public class AuthFlowIntegrationTests
             HttpStatusCode Status,
             string? SetCookie);
 
-        private readonly List<Call> _calls = new();
+        private readonly List<Call> _calls = [];
 
         public IReadOnlyList<Call> Calls => _calls;
 
@@ -349,7 +345,7 @@ public class AuthFlowIntegrationTests
             const string prefix = "ea_refresh=";
             var start = setCookie.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
             var raw = setCookie[(start + prefix.Length)..];
-            var end = raw.IndexOfAny(new[] { ';', '\n' });
+            var end = raw.IndexOfAny([';', '\n']);
             var value = end < 0 ? raw : raw[..end];
 
             var lower = setCookie.ToLowerInvariant();

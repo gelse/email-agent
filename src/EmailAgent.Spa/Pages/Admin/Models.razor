@@ -1,0 +1,394 @@
+@page "/admin/models"
+@attribute [Authorize(Roles = "Admin")]
+@inject ModelsClient ModelsApi
+@inject TokenStore TokenStore
+@inject JwtRoleParser RoleParser
+@inject NavigationManager Nav
+@inject ToastService Toasts
+
+@* M3T5: the /admin/models screen (§13.6). Gates run in the M1T8/M2T6 order:
+   the client-side Admin role check on the JWT (routing source of truth in the
+   SPA — no API call for authorization), then GET /v1/admin/models. A 401 OR a
+   403 from the API bounces to /account/login (M1T8 Users.razor parity: the
+   catalog namespace is Admin-only, so a 403 means the session is no longer an
+   admin); a 429 stays inline and friendly. *@
+<PageTitle>Models — Email Agent</PageTitle>
+
+@if (!_authorized)
+{
+    @* Role gate failed: OnInitializedAsync is already navigating to login. *@
+}
+else
+{
+    <h1>Models</h1>
+
+    @if (_error is not null)
+    {
+        <div class="error-box" id="models-error" role="alert">@_error</div>
+    }
+
+    <div class="toolbar">
+        <button type="button" class="btn-primary" id="add-model-open"
+                @onclick="OpenAddDialog">Add model</button>
+        <button type="button" class="btn-secondary" id="models-reload"
+                disabled="@_loading" @onclick="() => LoadAsync()">Reload</button>
+    </div>
+
+    @* §13.13 filters: the values only take effect on Apply, so a keystroke in
+       the name box never fires a request. *@
+    <div class="model-filters">
+        <label for="filter-enabled">Enabled</label>
+        <select id="filter-enabled" class="form-control" @bind="_enabledFilter">
+            <option value="">Any</option>
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+        </select>
+        <label for="filter-name">Display name contains</label>
+        <input id="filter-name" class="form-control" @bind="_nameFilter" />
+        <button type="button" class="btn-secondary" id="filter-apply"
+                @onclick="ApplyFiltersAsync">Apply filters</button>
+    </div>
+
+    @if (_loading)
+    {
+        <p>Loading…</p>
+    }
+    else if (!_loaded)
+    {
+        @* The first page never arrived (429, transport, 500): the banner above
+           is the whole content — neither the empty state nor a table may render
+           next to a load failure. *@
+    }
+    else if (_models.Count == 0)
+    {
+        @if (_error is null)
+        {
+            <p id="models-empty">No models configured. Click 'Add model' to add one.</p>
+            <button type="button" class="btn-secondary" id="models-empty-add"
+                    @onclick="OpenAddDialog">Add model</button>
+        }
+    }
+    else
+    {
+        <table class="model-table" id="models-table">
+            <thead>
+                <tr>
+                    <th scope="col">Display name</th>
+                    <th scope="col">Provider</th>
+                    <th scope="col">Model name</th>
+                    <th scope="col">Enabled</th>
+                    <th scope="col">Probed at</th>
+                    <th scope="col">Probe result</th>
+                    <th scope="col"><span class="visually-hidden">Actions</span></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var model in _models)
+                {
+                    <tr @key="model.Id">
+                        <td>@model.DisplayName</td>
+                        <td>@model.Provider</td>
+                        <td>@model.ModelName</td>
+                        <td>@EnabledBadge(model.Enabled)</td>
+                        <td>@FormatTime(model.ToolCallingProbedAt)</td>
+                        <td>@ProbeBadge(model.ToolCallingProbeResult)</td>
+                        <td class="model-actions">
+                            <button type="button" class="btn-secondary" id="@EditButtonId(model.Id)"
+                                    @onclick="() => OpenEditDialog(model.Id)">Edit</button>
+                            <button type="button" class="btn-secondary" id="@TestButtonId(model.Id)"
+                                    @onclick="() => OpenTestDialog(model)">Test completion</button>
+                            <button type="button" class="btn-secondary" id="@ToggleButtonId(model.Id)"
+                                    disabled="@(_busyRow == model.Id)"
+                                    @onclick="() => ToggleAsync(model)">@(model.Enabled ? "Disable" : "Enable")</button>
+                            <button type="button" class="btn-secondary" id="@DeleteButtonId(model.Id)"
+                                    @onclick="() => _deleteTarget = model">Delete</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    @if (!_loading && _nextCursor is not null)
+    {
+        @* The list is a keyset page (§13.13) — without this control everything
+           past the first 25 models would be invisible and undeletable. *@
+        <button type="button" class="btn-secondary" id="models-load-more"
+                @onclick="LoadMoreAsync">Load more</button>
+    }
+
+    @if (_showAdd || _editId is not null)
+    {
+        <EditModelDialog ModelId="@_editId"
+                         OnCancel="CloseDialogs"
+                         OnSaved="OnSavedAsync" />
+    }
+
+    @if (_testTarget is not null)
+    {
+        <TestCompletionDialog ModelId="@_testTarget.Id"
+                              ModelName="@_testTarget.ModelName"
+                              OnClose="() => _testTarget = null" />
+    }
+
+    @if (_deleteTarget is not null)
+    {
+        <DeleteModelConfirm Model="@_deleteTarget"
+                            OnCancel="() => _deleteTarget = null"
+                            OnDeleted="OnDeletedAsync" />
+    }
+}
+
+@code {
+    private bool _authorized;
+    private bool _loading;
+    private bool _showAdd;
+    private Guid? _editId;
+    private ModelDto? _testTarget;
+    private ModelDto? _deleteTarget;
+
+    private List<ModelDto> _models = new();
+
+    /// <summary>
+    /// Whether the first keyset page actually arrived. Without it a FAILED
+    /// first load (429, transport, 500) would render the empty state next to
+    /// the error banner — inviting the admin to add a model the list may
+    /// already contain.
+    /// </summary>
+    private bool _loaded;
+
+    /// <summary>Cursor of the next keyset page; null while the loaded page is the last one.</summary>
+    private string? _nextCursor;
+
+    /// <summary>Draft filter values (only applied by <c>Apply filters</c>).</summary>
+    private string _enabledFilter = string.Empty;
+    private string _nameFilter = string.Empty;
+
+    /// <summary>The filters the last request actually carried.</summary>
+    private bool? _appliedEnabled;
+    private string? _appliedName;
+
+    /// <summary>The row whose PATCH is in flight (Enable/Disable).</summary>
+    private Guid? _busyRow;
+
+    private string? _error;
+
+    /// <summary>
+    /// Client-side Admin gate first (the JWT claim decides — no API call for
+    /// routing), then the first catalog page.
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        var token = TokenStore.AccessToken;
+        var roles = token is null
+            ? Array.Empty<string>()
+            : RoleParser.GetRoles(token);
+        if (!roles.Contains("Admin"))
+        {
+            Nav.NavigateTo("/account/login");
+            return;
+        }
+
+        _authorized = true;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            var page = await ModelsApi.ListAsync(
+                cursor: null,
+                limit: 25,
+                enabledFilter: _appliedEnabled,
+                providerFilter: null,
+                displayNameContains: _appliedName);
+            _models = page.Items;
+            _nextCursor = page.NextCursor;
+            _loaded = true;
+        }
+        catch (ModelsApiException ex)
+            when (ex.Status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            // Both statuses mean "this session is no longer an admin here" —
+            // M1T8 Users.razor parity (a 403 from an Admin-only namespace is
+            // a session verdict, not a rendering problem).
+            Nav.NavigateTo("/account/login");
+        }
+        catch (ModelsApiException ex)
+        {
+            _error = ex.Status == HttpStatusCode.TooManyRequests
+                ? ex.FriendlyMessage
+                : ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>Fetches the next keyset page and appends it.</summary>
+    private async Task LoadMoreAsync()
+    {
+        if (string.IsNullOrEmpty(_nextCursor))
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        try
+        {
+            var page = await ModelsApi.ListAsync(
+                cursor: _nextCursor,
+                limit: 25,
+                enabledFilter: _appliedEnabled,
+                providerFilter: null,
+                displayNameContains: _appliedName);
+            _models.AddRange(page.Items);
+            _nextCursor = page.NextCursor;
+            _loaded = true;
+        }
+        catch (ModelsApiException ex)
+            when (ex.Status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (ModelsApiException ex)
+        {
+            _error = ex.Status == HttpStatusCode.TooManyRequests
+                ? ex.FriendlyMessage
+                : ex.Message;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>Commits the draft filters and reloads the first page with them.</summary>
+    private async Task ApplyFiltersAsync()
+    {
+        _appliedEnabled = _enabledFilter switch
+        {
+            "true" => true,
+            "false" => false,
+            _ => null,
+        };
+        _appliedName = string.IsNullOrWhiteSpace(_nameFilter) ? null : _nameFilter.Trim();
+        await LoadAsync();
+    }
+
+    private void OpenAddDialog() => _showAdd = true;
+
+    private void OpenEditDialog(Guid id)
+    {
+        _showAdd = false;
+        _editId = id;
+    }
+
+    private void OpenTestDialog(ModelDto model) => _testTarget = model;
+
+    private void CloseDialogs()
+    {
+        _showAdd = false;
+        _editId = null;
+    }
+
+    /// <summary>
+    /// Save handoff: close, announce the probe verdict the API just stored
+    /// (the dialog itself stays responsible for failures), refresh the list.
+    /// </summary>
+    private async Task OnSavedAsync(ModelDto saved)
+    {
+        CloseDialogs();
+        var probe = string.IsNullOrWhiteSpace(saved.ToolCallingProbeResult)
+            ? "—"
+            : saved.ToolCallingProbeResult;
+        Toasts.ShowSuccess(
+            $"Model '{saved.DisplayName}' saved — tool-calling probe: {probe}.");
+        await LoadAsync();
+    }
+
+    private async Task OnDeletedAsync()
+    {
+        var name = _deleteTarget?.DisplayName;
+        _deleteTarget = null;
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            Toasts.ShowSuccess($"Model '{name}' deleted.");
+        }
+
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// Enable/Disable: PATCH the inverse of the row's current flag (task
+    /// scope bullet). The response re-runs the probe server-side; a refusal
+    /// (403 disabled account, 429 budget) stays inline instead of moving the
+    /// page away from the row the admin just acted on.
+    /// </summary>
+    private async Task ToggleAsync(ModelDto model)
+    {
+        _busyRow = model.Id;
+        _error = null;
+        try
+        {
+            await ModelsApi.UpdateAsync(model.Id, new UpdateModelRequest
+            {
+                Enabled = !model.Enabled,
+            });
+            await LoadAsync();
+        }
+        catch (ModelsApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)
+        {
+            Nav.NavigateTo("/account/login");
+        }
+        catch (ModelsApiException ex)
+        {
+            // 403 (disabled account) and 429 (budget) stay inline: the row
+            // must not vanish under the admin's cursor, and a rate limit
+            // should say when to retry.
+            _error = ex.FriendlyMessage;
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Could not reach the API.";
+        }
+        finally
+        {
+            _busyRow = null;
+        }
+    }
+
+    /// <summary>Probed-at in the viewer's local time; "—" for a model the probe never touched.</summary>
+    private static string FormatTime(DateTimeOffset? value)
+        => value is null ? "—" : value.Value.ToLocalTime().ToString("g");
+
+    private static MarkupString EnabledBadge(bool enabled)
+        => new($"<span class=\"badge {(enabled ? "badge-ok" : "badge-off")}\">{(enabled ? "Enabled" : "Disabled")}</span>");
+
+    /// <summary>Green for Pass, red for Fail, gray for "never probed" (task column bullet).</summary>
+    private static MarkupString ProbeBadge(string? result)
+        => result switch
+        {
+            "Pass" => new MarkupString("<span class=\"badge badge-ok\">Pass</span>"),
+            "Fail" => new MarkupString("<span class=\"badge badge-fail\">Fail</span>"),
+            _ => new MarkupString("<span class=\"badge badge-muted\">Not probed</span>"),
+        };
+
+    internal static string EditButtonId(Guid id) => $"model-edit-{id:N}";
+    internal static string TestButtonId(Guid id) => $"model-test-{id:N}";
+    internal static string ToggleButtonId(Guid id) => $"model-toggle-{id:N}";
+    internal static string DeleteButtonId(Guid id) => $"model-delete-{id:N}";
+}

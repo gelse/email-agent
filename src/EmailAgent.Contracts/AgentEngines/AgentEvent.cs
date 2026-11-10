@@ -33,11 +33,32 @@ public sealed record AgentToolCall(string Name, JsonElement Arguments) : AgentEv
 /// <summary>
 /// Terminal success event with optional token usage —
 /// <c>{"kind":"done","prompt_tokens":1,"completion_tokens":2}</c>. Both fields
-/// are <see langword="null"/> when the provider reported no usage (M3's
-/// additive <c>TotalTokens</c> / <c>ProviderUsage</c> extend this record later).
+/// are <see langword="null"/> when the provider reported no usage.
+/// <para>
+/// M3T1 (SQ-M3-17) adds the additive, in-process-only
+/// <see cref="TotalTokens"/> / <see cref="ProviderUsage"/> properties: they
+/// carry the provider's full usage surface to the cost helper (M3T4) and are
+/// deliberately <b>not</b> part of the wire shape — the converter above
+/// serializes exactly the two positional fields.
+/// </para>
 /// </summary>
 [JsonConverter(typeof(AgentEventConverterFactory))]
-public sealed record AgentDone(int? PromptTokens, int? CompletionTokens) : AgentEvent("done");
+public sealed record AgentDone(int? PromptTokens, int? CompletionTokens) : AgentEvent("done")
+{
+    /// <summary>
+    /// The provider's <c>usage.total_tokens</c> when reported, otherwise
+    /// <see langword="null"/> (M3T1 SQ-M3-17, additive).
+    /// </summary>
+    public int? TotalTokens { get; init; }
+
+    /// <summary>
+    /// The raw provider <c>usage</c> block for the cost derivation service,
+    /// otherwise <see langword="null"/> (M3T1 SQ-M3-17, additive). Like every
+    /// <see cref="JsonElement"/>, it is tied to its <see cref="JsonDocument"/>:
+    /// clone it before disposing the source document.
+    /// </summary>
+    public JsonElement? ProviderUsage { get; init; }
+}
 
 /// <summary>
 /// Attaches the agent-event converter to every member of the

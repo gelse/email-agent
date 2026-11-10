@@ -1,0 +1,32 @@
+{
+  "id": "cmpl-probe-pass-1",
+  "object": "chat.completion",
+  "created": 1712000000,
+  "model": "test-model",
+  "api_key": "sk-test-redacted",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_probe_1",
+            "type": "function",
+            "function": {
+              "name": "ping",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 4,
+    "completion_tokens": 6,
+    "total_tokens": 10
+  }
+}

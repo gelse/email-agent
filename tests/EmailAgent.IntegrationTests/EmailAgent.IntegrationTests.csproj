@@ -41,7 +41,22 @@
     <ProjectReference Include="../../src/EmailAgent.Contracts/EmailAgent.Contracts.csproj" />
     <!-- M2T4: the Greenmail-backed ImapMessageSource suite + GreenMailFixture. -->
     <ProjectReference Include="../../src/EmailAgent.Connectors.Imap/EmailAgent.Connectors.Imap.csproj" />
+    <!-- M3T1: the OpenAI-compatible agent engine under test (internal seam via InternalsVisibleTo). -->
+    <ProjectReference Include="../../src/EmailAgent.Connectors.OpenAI/EmailAgent.Connectors.OpenAI.csproj" />
     <ProjectReference Include="../../src/EmailAgent.Infrastructure/EmailAgent.Infrastructure.csproj" />
     <ProjectReference Include="../../src/EmailAgent.Spa/EmailAgent.Spa.csproj" />
+    <!-- M3T1 (SQ-M3-7): the in-process OpenAI-compatible mock host (its own project). -->
+    <ProjectReference Include="Mocks/OpenAIMock/OpenAIMock.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      M3T1: Mocks/OpenAIMock is a SEPARATE project that happens to live inside
+      this project's tree. Its sources — including the obj/ files the default
+      **/*.cs glob would otherwise pick up (AssemblyInfo, GlobalUsings) — must
+      never compile into this project: OpenAIMock.Program has to stay its own
+      assembly for WebApplicationFactory<OpenAIMock.Program>.
+    -->
+    <Compile Remove="Mocks/OpenAIMock/**/*.cs" />
   </ItemGroup>
 </Project>

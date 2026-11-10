@@ -37,9 +37,9 @@ public class MessageSource
 
     public EncryptedBlob ConfigBlob { get; set; } = null!;
 
-    public ICollection<AgentConfig> AgentConfigs { get; set; } = new List<AgentConfig>();
+    public ICollection<AgentConfig> AgentConfigs { get; set; } = [];
 
-    public ICollection<ScheduledJob> ScheduledJobs { get; set; } = new List<ScheduledJob>();
+    public ICollection<ScheduledJob> ScheduledJobs { get; set; } = [];
 
-    public ICollection<ProcessedMessage> ProcessedMessages { get; set; } = new List<ProcessedMessage>();
+    public ICollection<ProcessedMessage> ProcessedMessages { get; set; } = [];
 }

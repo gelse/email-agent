@@ -2,8 +2,8 @@
   "plugin_id": "openai-compatible",
   "version": "1.0.0",
   "assembly": "EmailAgent.Connectors.OpenAI.dll",
-  "type": "EmailAgent.Connectors.OpenAI.OpenAIStubMessageSource",
-  "capabilities": [],
-  "http_allowlist": [],
-  "notes": "Stub for M2T3; real implementation in M3 (no capabilities granted until then)."
+  "type": "EmailAgent.Connectors.OpenAI.OpenAICompatibleAgentEngine",
+  "capabilities": ["http_egress"],
+  "http_allowlist": ["*"],
+  "notes": "OpenAI-compatible chat-completions engine (M3). Per-model base_url is resolved at runtime; wildcard egress per Q-CE3 (M3 SQ-M3-5)."
 }

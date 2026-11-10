@@ -1,6 +1,7 @@
 using System.Text.Json;
 using EmailAgent.Api.Sources;
 using EmailAgent.Contracts;
+using EmailAgent.Contracts.AgentEngines;
 using EmailAgent.Contracts.MessageSources;
 using EmailAgent.Contracts.Schema;
 using EmailAgent.Core.Audit;
@@ -124,6 +125,10 @@ public class SourceServiceTests
     {
         private readonly Dictionary<string, IMessageSource> _sources = new();
 
+        // M3T1: the second registry slot — the stub mirrors PluginRegistry's
+        // one-slot-per-plugin, refusal-wins-visible surface exactly.
+        private readonly Dictionary<string, IAgentEngine> _engines = new();
+
         public void RegisterMessageSource(string pluginId, IMessageSource source)
             => _sources[pluginId] = source;
 
@@ -132,9 +137,23 @@ public class SourceServiceTests
         public IMessageSource? GetMessageSource(string pluginId)
             => _sources.GetValueOrDefault(pluginId);
 
+        public void RegisterAgentEngine(string pluginId, IAgentEngine engine)
+            => _engines[pluginId] = engine;
+
+        public void UnregisterAgentEngine(string pluginId) => _engines.Remove(pluginId);
+
+        public IAgentEngine? GetAgentEngine(string pluginId)
+            => _engines.GetValueOrDefault(pluginId);
+
         public IReadOnlyCollection<string> MessageSourceIds => _sources.Keys;
 
-        public void Clear() => _sources.Clear();
+        public IReadOnlyCollection<string> AgentEngineIds => _engines.Keys;
+
+        public void Clear()
+        {
+            _sources.Clear();
+            _engines.Clear();
+        }
     }
 
     private sealed class RecordingAudit : IAuditLogger

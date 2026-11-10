@@ -29,7 +29,7 @@ public class DefaultTrustAnchorTests
 {
     /// <summary>The three DEFAULT plugins of §5 / M2 SQ-4 — no fourth entry may exist.</summary>
     private static readonly string[] DefaultPluginIds =
-        { "imap", "openai-compatible", "telegram-send" };
+        ["imap", "openai-compatible", "telegram-send"];
 
     [Fact]
     public void TrustAnchor_Covers_Exactly_The_Three_Connector_Plugins_At_V1_0_0()

@@ -1,0 +1,7 @@
+: recorded with api_key sk-test-redacted — OpenAI-compatible streaming fixture (M3T1 SQ-M3-8)
+data: {"id":"cmpl-happy-streaming-1","object":"chat.completion.chunk","created":1712000000,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}
+
+data: {"id":"cmpl-happy-streaming-1","object":"chat.completion.chunk","created":1712000000,"model":"test-model","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}
+
+data: {"id":"cmpl-happy-streaming-1","object":"chat.completion.chunk","created":1712000000,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}
+

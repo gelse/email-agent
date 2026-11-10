@@ -11,7 +11,7 @@ namespace EmailAgent.Spa.Auth;
 /// </summary>
 public sealed class TokenStore
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private string? _token;
 
     public TokenStore()
@@ -122,7 +122,7 @@ public sealed class TokenStore
 /// </remarks>
 public sealed class DekStore
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private string? _dek;
 
     /// <summary>Base64 of the 32-byte DEK, or <c>null</c> when the session is locked.</summary>

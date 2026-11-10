@@ -23,14 +23,8 @@ namespace EmailAgent.Api.Auth;
 /// acceptance criterion.
 /// </para>
 /// </remarks>
-public sealed class OriginValidator
+public sealed class OriginValidator(IConfiguration configuration)
 {
-    private readonly IConfiguration _configuration;
-
-    public OriginValidator(IConfiguration configuration)
-    {
-        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-    }
 
     /// <summary>
     /// Returns <c>true</c> when the request's <c>Origin</c> header is absent
@@ -98,8 +92,8 @@ public sealed class OriginValidator
 
     private IEnumerable<string> EnumerateAllowedOrigins()
     {
-        var csv = _configuration["Spa:AllowedOrigins"]
-            ?? _configuration["Spa__AllowedOrigins"]
+        var csv = configuration["Spa:AllowedOrigins"]
+            ?? configuration["Spa__AllowedOrigins"]
             ?? string.Empty;
 
         foreach (var part in csv.Split(
@@ -109,8 +103,8 @@ public sealed class OriginValidator
             yield return Normalize(part);
         }
 
-        var baseUrl = _configuration["Api:PublicBaseUrl"]
-            ?? _configuration["Api__PublicBaseUrl"]
+        var baseUrl = configuration["Api:PublicBaseUrl"]
+            ?? configuration["Api__PublicBaseUrl"]
             ?? string.Empty;
 
         if (!string.IsNullOrWhiteSpace(baseUrl) && Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))

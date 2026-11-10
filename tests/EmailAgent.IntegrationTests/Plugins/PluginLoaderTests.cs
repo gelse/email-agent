@@ -40,7 +40,7 @@ namespace EmailAgent.IntegrationTests.Plugins;
 /// </summary>
 [Trait("Category", "M2T3")]
 [Collection("Postgres")]
-public class PluginLoaderTests
+public class PluginLoaderTests(PostgresFixture postgres)
 {
     private const string AcceptedPluginId = "m2t3-accepted";
     private const string UnsignedPluginId = "m2t3-unsigned";
@@ -55,11 +55,19 @@ public class PluginLoaderTests
     private const string CompanionDll = "Fabricated.Plugin.dll";
 
     private static readonly string[] DefaultPluginIds =
-        { "imap", "openai-compatible", "telegram-send" };
+        ["imap", "openai-compatible", "telegram-send"];
 
-    private readonly PostgresFixture _postgres;
+    /// <summary>
+    /// M3T1: each plugin occupies exactly ONE registry slot — since the
+    /// OpenAI-compatible entry type is an <c>IAgentEngine</c>, only these two
+    /// DEFAULT plugins appear in <see cref="IPluginRegistry.MessageSourceIds"/>.
+    /// <see cref="DefaultPluginIds"/> still names all three for identity /
+    /// signature / approval assertions.
+    /// </summary>
+    private static readonly string[] DefaultMessageSourceIds = ["imap", "telegram-send"];
 
-    public PluginLoaderTests(PostgresFixture postgres) => _postgres = postgres;
+    /// <summary>M3T1: the DEFAULT plugins occupying the IAgentEngine slot.</summary>
+    private static readonly string[] DefaultAgentEngineIds = ["openai-compatible"];
 
     // -----------------------------------------------------------------------
     // Acceptance criteria 1 + 8 + 9: a correctly signed AND approved drop-in
@@ -71,7 +79,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Accepts_Signed_Plugin_And_Registers_It_In_Registry()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -86,8 +94,10 @@ public class PluginLoaderTests
         registry.GetMessageSource(AcceptedPluginId).Should().NotBeNull(
             "a plugin signed with Plugin:SigningKey and present in plugin_approvals must register");
         registry.MessageSourceIds.Should().BeEquivalentTo(
-            new[] { "imap", "openai-compatible", "telegram-send", AcceptedPluginId },
-            "the three DEFAULT plugins load alongside the accepted drop-in");
+            ["imap", "telegram-send", AcceptedPluginId],
+            "the two DEFAULT message sources load alongside the accepted drop-in");
+        registry.AgentEngineIds.Should().BeEquivalentTo(
+            DefaultAgentEngineIds, "the DEFAULT OpenAI-compatible engine occupies the engine slot");
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<EmailAgentDbContext>();
@@ -126,7 +136,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Rejects_Unsigned_Plugin_With_Clear_Error()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -139,7 +149,7 @@ public class PluginLoaderTests
 
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(UnsignedPluginId).Should().BeNull();
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         var rejection = await FindAuditMetadataAsync(
             factory, AuditActions.PluginRejected,
@@ -157,7 +167,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Rejects_Tampered_Plugin_With_Clear_Error()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -173,7 +183,7 @@ public class PluginLoaderTests
 
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(TamperedPluginId).Should().BeNull();
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         var rejection = await FindAuditMetadataAsync(
             factory, AuditActions.PluginRejected,
@@ -194,7 +204,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Rejects_Plugin_Whose_Companion_Manifest_Tampered_After_Signing()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -222,7 +232,7 @@ public class PluginLoaderTests
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(ManifestTamperedPluginId).Should().BeNull(
             "a manifest edited after signing must not register — its fields are covered by the HMAC");
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         // Filter by the message's unique plugin id: every signature_mismatch
         // row shares action + reason + assembly_file across this collection.
@@ -239,7 +249,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Rejects_Plugin_Not_In_PluginApprovals_With_Clear_Error()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -254,7 +264,7 @@ public class PluginLoaderTests
 
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(UnapprovedPluginId).Should().BeNull();
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         var rejection = await FindAuditMetadataAsync(
             factory, AuditActions.PluginRejected,
@@ -269,7 +279,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Rejects_Plugin_With_HttpEgress_And_Empty_Allowlist_With_Clear_Error()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -282,8 +292,8 @@ public class PluginLoaderTests
             "1.0.0",
             bytes,
             signingKey,
-            capabilities: new[] { "http_egress" },
-            httpAllowlist: Array.Empty<string>());
+            capabilities: ["http_egress"],
+            httpAllowlist: []);
         await ApproveAsync(connectionString, EgressEmptyPluginId, "1.0.0");
 
         await using var factory = ApiTestFactory.Create(connectionString, directory, signingKey);
@@ -320,7 +330,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Rejects_Plugin_Whose_Declared_Entry_Type_Is_Not_In_The_Assembly()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -339,7 +349,7 @@ public class PluginLoaderTests
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
         registry.GetMessageSource(BadEntryTypePluginId).Should().BeNull(
             "a manifest declaring a type the assembly does not contain must not fall back to another IMessageSource");
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
 
         var rejection = await FindAuditMetadataAsync(
             factory, AuditActions.PluginRejected,
@@ -364,7 +374,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Skips_Companionless_Dependency_Dll_Without_Any_Audit_Row()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -386,7 +396,7 @@ public class PluginLoaderTests
         registry.GetMessageSource(hostPluginId).Should().NotBeNull(
             "the signed and approved plugin must register even with a sibling dependency beside it");
         registry.MessageSourceIds.Should().BeEquivalentTo(
-            new[] { "imap", "openai-compatible", "telegram-send", hostPluginId },
+            ["imap", "telegram-send", hostPluginId],
             "the dependency must not become a registry entry of its own");
 
         var rejectionRow = await FindAuditMetadataAsync(
@@ -412,14 +422,20 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Loads_Default_Plugins_From_Referenced_Assemblies_Without_Signature_On_Disk()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
 
         // No plugins directory planted: only the build-output DEFAULT path runs.
         await using var factory = ApiTestFactory.Create(connectionString);
         var client = factory.CreateClient();
 
         var registry = factory.Services.GetRequiredService<IPluginRegistry>();
-        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultPluginIds);
+        registry.MessageSourceIds.Should().BeEquivalentTo(DefaultMessageSourceIds);
+        registry.AgentEngineIds.Should().BeEquivalentTo(
+            DefaultAgentEngineIds, "M3T1: the OpenAI-compatible DEFAULT plugin occupies the engine slot");
+        registry.GetAgentEngine("openai-compatible").Should().NotBeNull(
+            "the engine entry type registered through the loader's IAgentEngine dispatch");
+        registry.GetMessageSource("openai-compatible").Should().BeNull(
+            "each plugin occupies exactly ONE slot — the engine class is not an IMessageSource");
 
         foreach (var assemblyName in new[]
                      { "EmailAgent.Connectors.Imap", "EmailAgent.Connectors.OpenAI", "EmailAgent.Connectors.Telegram" })
@@ -464,6 +480,28 @@ public class PluginLoaderTests
     }
 
     // -----------------------------------------------------------------------
+    // M3T1 review WARNING: the engine transport is the host's NAMED HttpClient
+    // and must carry a generous but FINITE timeout — an unbounded call can
+    // wedge a caller forever behind a stalled provider, while the framework's
+    // 100 s default aborts slow generations. If Program.cs ever drops the
+    // ConfigureHttpClient bound, this test fails before the defect ships.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Engine_Transport_HttpClient_Carries_The_Finite_Engine_Timeout()
+    {
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
+        await using var factory = ApiTestFactory.Create(connectionString);
+        _ = factory.CreateClient(); // host start
+
+        var httpClient = factory.Services.GetRequiredService<HttpClient>();
+
+        httpClient.Timeout.Should().Be(
+            TimeSpan.FromMinutes(30),
+            "the DI-resolved engine client must keep the configured bound — neither infinite nor the 100 s default");
+    }
+
+    // -----------------------------------------------------------------------
     // Acceptance criterion 7 (Linux): SIGHUP reloads the drop folder — the
     // old collectible AssemblyLoadContext is discarded (WeakReference + GC
     // spin-wait, per the task's Risks) and exactly one entry per plugin_id
@@ -480,7 +518,7 @@ public class PluginLoaderTests
             return;
         }
 
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -533,7 +571,7 @@ public class PluginLoaderTests
                 group => group.Count() == 1,
                 "the reload must leave exactly one entry per plugin_id");
         registry.MessageSourceIds.Should().BeEquivalentTo(
-            new[] { "imap", "openai-compatible", "telegram-send", SighupPluginId });
+            new[] { "imap", "telegram-send", SighupPluginId });
     }
 
     // -----------------------------------------------------------------------
@@ -547,7 +585,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Shutdown_Drains_Without_Writing_Plugin_Loaded_Audit_Rows()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
 
         long afterBoot;
         await using (var factory = ApiTestFactory.Create(connectionString))
@@ -577,7 +615,7 @@ public class PluginLoaderTests
     [Fact]
     public async Task Loader_Unregisters_Default_Plugin_Whose_Id_A_Refused_DropIn_Claims()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = RandomSigningKey();
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -596,8 +634,11 @@ public class PluginLoaderTests
         registry.GetMessageSource("imap").Should().BeNull(
             "refusal-wins: the refused drop-in claimed plugin_id imap, so the good build-output imap must not survive the scan");
         registry.MessageSourceIds.Should().BeEquivalentTo(
-            new[] { "openai-compatible", "telegram-send" },
-            "only the two DEFAULT plugins whose ids were not poisoned by a refusal remain registered");
+            ["telegram-send"],
+            "only the DEFAULT message source whose id was not poisoned by the refusal remains registered");
+        registry.AgentEngineIds.Should().BeEquivalentTo(
+            DefaultAgentEngineIds,
+            "the refusal claimed plugin_id imap — the engine slot is untouched by that unregister");
 
         // The signature_mismatch row must carry the claimed plugin_id — that
         // is the value the refusal-wins unregister keys on, and what lets an
@@ -664,8 +705,8 @@ public class PluginLoaderTests
             ["version"] = version,
             ["assembly"] = CompanionDll,
             ["type"] = typeName ?? "EmailAgent.Connectors.Imap.ImapMessageSource",
-            ["capabilities"] = capabilities ?? new[] { "processed_messages_write" },
-            ["http_allowlist"] = httpAllowlist ?? Array.Empty<string>(),
+            ["capabilities"] = capabilities ?? ["processed_messages_write"],
+            ["http_allowlist"] = httpAllowlist ?? [],
             ["notes"] = "M2T3 integration-test fabricated drop-in (not a shipped plugin).",
         };
         return JsonSerializer.Serialize(manifest);

@@ -63,9 +63,9 @@ public static class Cursor
         }
 
         if (payload?.CreatedAt is null
-            || !DateTimeOffset.TryParse(
-                payload.CreatedAt, CultureInfo.InvariantCulture, DateTimeStyles.None,
-                out var createdAt))
+            || !DateTimeOffset.TryParseExact(
+                payload.CreatedAt, "O", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var createdAt))
         {
             throw new InvalidCursorException("The cursor payload has no valid timestamp.");
         }
@@ -75,7 +75,12 @@ public static class Cursor
             throw new InvalidCursorException("The cursor payload has no valid identifier.");
         }
 
-        return (createdAt, id);
+        // Npgsql only accepts DateTimeOffset with Offset == 0 for timestamptz;
+        // normalizing here keeps a crafted offset (or a locally-parsed value)
+        // from becoming a 500 — a non-UTC cursor must stay a §13.12 400 or a
+        // valid instant, never an unhandled error (M3T3 review S1; same fix the
+        // M2T5 CursorPager codec applies).
+        return (createdAt.ToUniversalTime(), id);
     }
 
     /// <summary>base64url without padding (URL- and query-safe).</summary>

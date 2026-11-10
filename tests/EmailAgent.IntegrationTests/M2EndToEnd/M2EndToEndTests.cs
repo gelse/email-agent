@@ -38,20 +38,12 @@ public sealed class M2E2ECollection : ICollectionFixture<PostgresFixture>
 /// </remarks>
 [Trait("Category", "M2EndToEnd")]
 [Collection(M2E2ECollection.Name)]
-public sealed class M2EndToEndTests : IClassFixture<GreenMailFixture>
+public sealed class M2EndToEndTests(PostgresFixture postgres, GreenMailFixture greenMail)
+    : IClassFixture<GreenMailFixture>
 {
     private const string SeedSubjectPrefix = "M2E2E message";
 
     private const string SeedBodyPrefix = "injected via greenmail message";
-
-    private readonly PostgresFixture _postgres;
-    private readonly GreenMailFixture _greenMail;
-
-    public M2EndToEndTests(PostgresFixture postgres, GreenMailFixture greenMail)
-    {
-        _postgres = postgres;
-        _greenMail = greenMail;
-    }
 
     /// <summary>
     /// Smoke flow 1, steps 6–10 (+ the milestone's dedupe-keyed-record and
@@ -159,7 +151,7 @@ public sealed class M2EndToEndTests : IClassFixture<GreenMailFixture>
 
         // Round-trip every body blob under the caller's DEK: the plaintext the
         // connector fetched is what comes back, and it was never stored in clear.
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         foreach (var row in rows)
         {
             // UnwrapConfigAsync is the generic user-DEK unwrap helper: it reads
@@ -250,15 +242,15 @@ public sealed class M2EndToEndTests : IClassFixture<GreenMailFixture>
     /// </summary>
     private async Task<(SourcesHost Host, Guid SourceId)> SeedAndCreateSourceAsync()
     {
-        await _greenMail.PurgeMailAsync();
+        await greenMail.PurgeMailAsync();
         for (var i = 1; i <= 3; i++)
         {
-            await _greenMail.SendAsync($"{SeedSubjectPrefix} {i}", $"{SeedBodyPrefix} {i}");
+            await greenMail.SendAsync($"{SeedSubjectPrefix} {i}", $"{SeedBodyPrefix} {i}");
         }
 
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         var created = await SourcesTestHost.CreateSourceAsync(
-            host, "m2e2e greenmail inbox", _greenMail.CreateConfig());
+            host, "m2e2e greenmail inbox", greenMail.CreateConfig());
         return (host, SourcesTestHost.IdOf(created));
     }
 

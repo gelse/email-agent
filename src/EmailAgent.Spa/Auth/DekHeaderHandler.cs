@@ -17,24 +17,17 @@ namespace EmailAgent.Spa.Auth;
 /// header is never logged or persisted here — it is just read from memory
 /// and placed on the request.
 /// </remarks>
-public sealed class DekHeaderHandler : DelegatingHandler
+public sealed class DekHeaderHandler(TokenStore tokenStore) : DelegatingHandler
 {
     /// <summary>The M2-only header the <c>/v1/user/sources</c> namespace reads (server: <c>SourcesHandlers.DekHeaderName</c>).</summary>
     public const string HeaderName = "X-User-Dek";
-
-    private readonly TokenStore _tokenStore;
-
-    public DekHeaderHandler(TokenStore tokenStore)
-    {
-        _tokenStore = tokenStore ?? throw new ArgumentNullException(nameof(tokenStore));
-    }
 
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var dek = _tokenStore.DekStore.DekBase64;
+        var dek = tokenStore.DekStore.DekBase64;
 
         // Stale copy first: a retry clone can arrive carrying one, and two
         // values would make the server read the wrong key.

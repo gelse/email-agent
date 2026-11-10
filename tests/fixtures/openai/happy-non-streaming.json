@@ -1,0 +1,22 @@
+{
+  "id": "cmpl-happy-non-streaming-1",
+  "object": "chat.completion",
+  "created": 1712000000,
+  "model": "test-model",
+  "api_key": "sk-test-redacted",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "hello world"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 2,
+    "total_tokens": 7
+  }
+}

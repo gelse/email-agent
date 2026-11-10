@@ -31,17 +31,10 @@ namespace EmailAgent.IntegrationTests.Identity;
 /// state, like a subsequent request would.
 /// </summary>
 [Collection("Postgres")]
-public class OtpServiceIntegrationTests
+public class OtpServiceIntegrationTests(PostgresFixture postgres)
 {
     private static readonly SemaphoreSlim MigrationGate = new(1, 1);
     private static string? _migratedConnectionString;
-
-    private readonly PostgresFixture _postgres;
-
-    public OtpServiceIntegrationTests(PostgresFixture postgres)
-    {
-        _postgres = postgres;
-    }
 
     [Fact]
     public async Task Issue_Verify_HappyPath_RoundTrip()
@@ -359,7 +352,7 @@ public class OtpServiceIntegrationTests
     /// <summary>Applies every migration once per shared Postgres container.</summary>
     private async Task<string> MigrateAsync()
     {
-        var connectionString = _postgres.ConnectionString;
+        var connectionString = postgres.ConnectionString;
 
         await MigrationGate.WaitAsync();
         try

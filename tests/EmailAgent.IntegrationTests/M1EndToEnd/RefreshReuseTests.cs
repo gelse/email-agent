@@ -25,16 +25,12 @@ namespace EmailAgent.IntegrationTests.M1EndToEnd;
 /// </summary>
 [Trait("Category", "M1EndToEnd")]
 [Collection("Postgres")]
-public class RefreshReuseTests
+public class RefreshReuseTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public RefreshReuseTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task RotatedToken_Reuse_EmitsAudit_AndRevokesFamily()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         await AdminTestHost.EnsureRolesAsync(factory);
         using var client = AccountTestHost.CreateClient(factory);

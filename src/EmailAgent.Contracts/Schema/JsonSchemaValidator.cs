@@ -68,8 +68,8 @@ public static class JsonSchemaValidator
         if (result.IsValid)
             return ValidationResult.Success();
 
-        var issues = new List<ValidationIssue>();
-        var seen = new HashSet<(string Path, string Reason)>();
+        List<ValidationIssue> issues = [];
+        HashSet<(string Path, string Reason)> seen = [];
         CollectIssues(result, issues, seen);
 
         if (issues.Count == 0)
