@@ -14,18 +14,12 @@ namespace EmailAgent.Api.Auth;
 /// 5/min login 429 path and write only <c>Retry-After</c> for unauthenticated
 /// rejections (§13.14: "Unauthenticated responses do not carry these headers").
 /// </summary>
-public sealed class AuthenticatedRateLimitMiddleware
+public sealed class AuthenticatedRateLimitMiddleware(RequestDelegate next)
 {
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
-    private readonly RequestDelegate _next;
     private readonly Lock _sync = new();
     private readonly Dictionary<string, WindowEntry> _counters = new();
-
-    public AuthenticatedRateLimitMiddleware(RequestDelegate next)
-    {
-        _next = next;
-    }
 
     private readonly record struct WindowEntry(DateTimeOffset WindowStart, int Count);
 
@@ -33,7 +27,7 @@ public sealed class AuthenticatedRateLimitMiddleware
     {
         if (context.User.Identity?.IsAuthenticated != true)
         {
-            await _next(context);
+            await next(context);
             return;
         }
 
@@ -96,6 +90,6 @@ public sealed class AuthenticatedRateLimitMiddleware
             return;
         }
 
-        await _next(context);
+        await next(context);
     }
 }

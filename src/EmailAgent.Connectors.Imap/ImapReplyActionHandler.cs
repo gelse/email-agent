@@ -19,13 +19,9 @@ namespace EmailAgent.Connectors.Imap;
 /// without opening an SMTP session. SMTP credentials are manual per-handler
 /// config (no reuse of any IMAP source).
 /// </summary>
-public sealed class ImapReplyActionHandler : IActionHandler
+public sealed class ImapReplyActionHandler(ISmtpClientFactory smtpFactory) : IActionHandler
 {
-    private readonly ISmtpClientFactory _smtpFactory;
-
     public ImapReplyActionHandler() : this(new MailKitSmtpClientFactory()) { }
-
-    public ImapReplyActionHandler(ISmtpClientFactory smtpFactory) => _smtpFactory = smtpFactory;
 
     /// <inheritdoc />
     public string TypeId => "imap-reply";
@@ -106,7 +102,7 @@ public sealed class ImapReplyActionHandler : IActionHandler
         try
         {
             var message = BuildMessage(smtp, toMailbox, subject, body, ctx.SourceMessage);
-            using var client = _smtpFactory.Create();
+            using var client = smtpFactory.Create();
             var secure = smtp.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
             await client.ConnectAsync(smtp.Host, smtp.Port, secure, ct).ConfigureAwait(false);
             await client.AuthenticateAsync(smtp.Username, smtp.Password, ct).ConfigureAwait(false);
@@ -134,14 +130,9 @@ public sealed class ImapReplyActionHandler : IActionHandler
         SmtpConfig smtp, MailboxAddress to, string subject, string body, SourceMessageSnapshot source)
     {
         var message = new MimeMessage();
-        if (!string.IsNullOrWhiteSpace(smtp.FromName))
-        {
-            message.From.Add(new MailboxAddress(smtp.FromName, smtp.FromAddress));
-        }
-        else
-        {
-            message.From.Add(MailboxAddress.Parse(smtp.FromAddress));
-        }
+        message.From.Add(!string.IsNullOrWhiteSpace(smtp.FromName)
+            ? new MailboxAddress(smtp.FromName, smtp.FromAddress)
+            : MailboxAddress.Parse(smtp.FromAddress));
 
         message.To.Add(to);
         message.Subject = subject;

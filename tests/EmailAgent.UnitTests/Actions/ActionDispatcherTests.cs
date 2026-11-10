@@ -426,10 +426,9 @@ public sealed class ActionDispatcherTests : IDisposable
     /// for any <see cref="JsonDocument"/> property makes the model valid without
     /// affecting the entities under test.
     /// </summary>
-    private sealed class TestDispatcherDbContext : EmailAgentDbContext
+    private sealed class TestDispatcherDbContext(DbContextOptions<TestDispatcherDbContext> options)
+        : EmailAgentDbContext(options)
     {
-        public TestDispatcherDbContext(DbContextOptions<TestDispatcherDbContext> options) : base(options) { }
-
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);

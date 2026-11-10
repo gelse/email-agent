@@ -10,19 +10,15 @@ using Xunit;
 namespace EmailAgent.IntegrationTests.Connectors.Imap;
 
 /// <summary>M4T2: Greenmail SMTP integration for imap-reply/imap-forward.</summary>
-public sealed class ImapActionHandlerTests : IClassFixture<GreenMailFixture>, IAsyncLifetime
+public sealed class ImapActionHandlerTests(GreenMailFixture gm) : IClassFixture<GreenMailFixture>, IAsyncLifetime
 {
-    private readonly GreenMailFixture _gm;
-
-    public ImapActionHandlerTests(GreenMailFixture gm) => _gm = gm;
-
-    public async Task InitializeAsync() => await _gm.PurgeMailAsync();
+    public async Task InitializeAsync() => await gm.PurgeMailAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
     private JsonElement SmtpConfig(string? from = null) => JsonSerializer.SerializeToElement(new
     {
-        host = _gm.SmtpHost,
-        port = (int)_gm.SmtpPort,
+        host = gm.SmtpHost,
+        port = (int)gm.SmtpPort,
         use_ssl = false,
         username = GreenMailFixture.Username,
         password = GreenMailFixture.Password,
@@ -44,14 +40,14 @@ public sealed class ImapActionHandlerTests : IClassFixture<GreenMailFixture>, IA
 
         result.Ok.Should().BeTrue();
         result.SideEffects.Should().ContainSingle(e => e.Kind == SideEffectKinds.SentEmail);
-        (await _gm.CountMessagesAsync(GreenMailFixture.Email)).Should().Be(1);
+        (await gm.CountMessagesAsync(GreenMailFixture.Email)).Should().Be(1);
 
-        var messages = await _gm.GetMessagesAsync(GreenMailFixture.Email);
+        var messages = await gm.GetMessagesAsync(GreenMailFixture.Email);
         messages.Should().NotBeEmpty();
         // Raw MIME: Greenmail REST returns message metadata; fetch by id when available.
         if (messages[0].TryGetProperty("id", out var idProp))
         {
-            var raw = await _gm.GetRawMessageAsync(idProp.ToString()!);
+            var raw = await gm.GetRawMessageAsync(idProp.ToString()!);
             var mime = MimeMessage.Load(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(raw)));
             mime.Subject.Should().Be("Re: Hello");
             mime.InReplyTo.Should().Be("<orig@test>");
@@ -72,7 +68,7 @@ public sealed class ImapActionHandlerTests : IClassFixture<GreenMailFixture>, IA
         result.Ok.Should().BeTrue();
         result.SideEffects.Should().ContainSingle(e => e.Kind == SideEffectKinds.WouldSendEmail);
         factory.CreateCount.Should().Be(0);
-        (await _gm.CountMessagesAsync(GreenMailFixture.Email)).Should().Be(0);
+        (await gm.CountMessagesAsync(GreenMailFixture.Email)).Should().Be(0);
     }
 
     [Fact]
@@ -113,7 +109,7 @@ public sealed class ImapActionHandlerTests : IClassFixture<GreenMailFixture>, IA
         var handler = new ImapReplyActionHandler();
         var bad = JsonSerializer.SerializeToElement(new
         {
-            host = _gm.SmtpHost, port = (int)_gm.SmtpPort, use_ssl = false,
+            host = gm.SmtpHost, port = (int)gm.SmtpPort, use_ssl = false,
             username = GreenMailFixture.Username, password = "WRONG",
             from_address = "sender@test.local",
         });
@@ -137,7 +133,7 @@ public sealed class ImapActionHandlerTests : IClassFixture<GreenMailFixture>, IA
 
         result.Ok.Should().BeTrue();
         result.SideEffects.Should().ContainSingle(e => e.Kind == SideEffectKinds.SentEmail);
-        (await _gm.CountMessagesAsync(GreenMailFixture.Email)).Should().Be(1);
+        (await gm.CountMessagesAsync(GreenMailFixture.Email)).Should().Be(1);
     }
 
     [Fact]

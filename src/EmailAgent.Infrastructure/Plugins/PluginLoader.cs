@@ -641,10 +641,7 @@ public sealed class PluginLoader(
             }
 
             // Gate 5: map the bytes only now that they verified.
-            if (context is null)
-            {
-                context = new PluginLoadContext(directory);
-            }
+            context ??= new PluginLoadContext(directory);
 
             Assembly loaded;
             try

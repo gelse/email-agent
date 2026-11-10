@@ -7,16 +7,10 @@ using EmailAgent.Spa.Auth;
 namespace EmailAgent.Spa.Actions;
 
 /// <summary>M4T4: typed client for /v1/user/actions (mirrors SourcesClient patterns).</summary>
-public sealed class ActionsApiException : Exception
+public sealed class ActionsApiException(HttpStatusCode status, ApiProblem? problem, string message) : Exception(message)
 {
-    public ActionsApiException(HttpStatusCode status, ApiProblem? problem, string message) : base(message)
-    {
-        Status = status;
-        Problem = problem;
-    }
-
-    public HttpStatusCode Status { get; }
-    public ApiProblem? Problem { get; }
+    public HttpStatusCode Status { get; } = status;
+    public ApiProblem? Problem { get; } = problem;
     public IReadOnlyList<ApiProblemEntry> FieldErrors => Problem?.Errors ?? Array.Empty<ApiProblemEntry>();
 
     public static async Task<ActionsApiException> CreateAsync(HttpResponseMessage response)
@@ -44,10 +38,9 @@ public sealed class ActionsApiException : Exception
     }
 }
 
-public sealed class ActionsClient
+public sealed class ActionsClient(HttpClient api)
 {
-    private readonly HttpClient _api;
-    public ActionsClient(HttpClient api) => _api = api ?? throw new ArgumentNullException(nameof(api));
+    private readonly HttpClient _api = api ?? throw new ArgumentNullException(nameof(api));
 
     public async Task<ActionListResponse> ListAsync(string? cursor, int limit = 25, string? typeId = null)
     {

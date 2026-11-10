@@ -6,20 +6,13 @@ namespace EmailAgent.Infrastructure.Plugins;
 /// — fail-closed refusal, audited as <c>plugin_rejected</c> with reason
 /// <c>not_approved</c>. The admin UI that inserts approval rows lands in M7b.
 /// </summary>
-public sealed class PluginApprovalException : Exception
+public sealed class PluginApprovalException(string pluginId, string version) : Exception(
+    $"plugin '{pluginId}' {version} has no plugin_approvals row and does not match "
+    + "DefaultTrustAnchor (Q-O5; admin approval UI lands in M7b).")
 {
     /// <summary>The manifest plugin_id that lacked an approval row.</summary>
-    public string PluginId { get; }
+    public string PluginId { get; } = pluginId;
 
     /// <summary>The manifest version that lacked an approval row.</summary>
-    public string Version { get; }
-
-    public PluginApprovalException(string pluginId, string version)
-        : base(
-            $"plugin '{pluginId}' {version} has no plugin_approvals row and does not match "
-            + "DefaultTrustAnchor (Q-O5; admin approval UI lands in M7b).")
-    {
-        PluginId = pluginId;
-        Version = version;
-    }
+    public string Version { get; } = version;
 }

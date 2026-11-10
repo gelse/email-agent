@@ -13,18 +13,12 @@ namespace EmailAgent.Api.Actions;
 /// (shared with the dispatcher reader — SQ-M4-8 / M4T1). Every method joins
 /// the ambient transaction of the caller's scoped <see cref="EmailAgentDbContext"/>.
 /// </summary>
-public sealed class EncryptedActionConfigStore
+public sealed class EncryptedActionConfigStore(EmailAgentDbContext db, IUserBlobCrypto crypto)
 {
     public const string Purpose = "action_config";
 
-    private readonly EmailAgentDbContext _db;
-    private readonly IUserBlobCrypto _crypto;
-
-    public EncryptedActionConfigStore(EmailAgentDbContext db, IUserBlobCrypto crypto)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _crypto = crypto ?? throw new ArgumentNullException(nameof(crypto));
-    }
+    private readonly EmailAgentDbContext _db = db ?? throw new ArgumentNullException(nameof(db));
+    private readonly IUserBlobCrypto _crypto = crypto ?? throw new ArgumentNullException(nameof(crypto));
 
     public async Task<Guid> WriteAsync(Guid ownerUserId, byte[] dek, JsonElement config, CancellationToken ct)
     {

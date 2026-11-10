@@ -7,12 +7,8 @@ namespace EmailAgent.Infrastructure.Actions;
 /// M4T1: production <see cref="IActionHandlerRegistry"/> backed by the host
 /// <see cref="IPluginRegistry"/> (the slot M4T1 adds).
 /// </summary>
-public sealed class PluginActionHandlerRegistry : IActionHandlerRegistry
+public sealed class PluginActionHandlerRegistry(IPluginRegistry plugins) : IActionHandlerRegistry
 {
-    private readonly IPluginRegistry _plugins;
-
-    public PluginActionHandlerRegistry(IPluginRegistry plugins) => _plugins = plugins;
-
     /// <inheritdoc />
-    public IActionHandler? GetHandler(string typeId) => _plugins.GetActionHandler(typeId);
+    public IActionHandler? GetHandler(string typeId) => plugins.GetActionHandler(typeId);
 }

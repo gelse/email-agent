@@ -22,17 +22,13 @@ namespace EmailAgent.IntegrationTests.M4EndToEnd;
 /// </summary>
 [Trait("Category", "M4EndToEnd")]
 [Collection(M4E2ECollection.Name)]
-public sealed class AuditChainTests
+public sealed class AuditChainTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public AuditChainTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task AuditChain_IsValid_AndContainsAllFiveM4Actions()
     {
         // Minimal self-contained M4 flow (no external services needed).
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var factory = ApiTestFactory.Create(connectionString);
         await using var __ = factory;
         AccountTestHost.CreateClient(factory); // boot host

@@ -6,14 +6,11 @@ using EmailAgent.Spa.Auth;
 
 namespace EmailAgent.Spa.NotificationsApi;
 
-public sealed class NotificationsApiException : Exception
+public sealed class NotificationsApiException(HttpStatusCode status, ApiProblem? problem, string message)
+    : Exception(message)
 {
-    public NotificationsApiException(HttpStatusCode status, ApiProblem? problem, string message) : base(message)
-    {
-        Status = status; Problem = problem;
-    }
-    public HttpStatusCode Status { get; }
-    public ApiProblem? Problem { get; }
+    public HttpStatusCode Status { get; } = status;
+    public ApiProblem? Problem { get; } = problem;
 
     public static async Task<NotificationsApiException> CreateAsync(HttpResponseMessage response)
     {
@@ -32,10 +29,9 @@ public sealed class NotificationsApiException : Exception
     }
 }
 
-public sealed class NotificationsClient
+public sealed class NotificationsClient(HttpClient api)
 {
-    private readonly HttpClient _api;
-    public NotificationsClient(HttpClient api) => _api = api ?? throw new ArgumentNullException(nameof(api));
+    private readonly HttpClient _api = api ?? throw new ArgumentNullException(nameof(api));
 
     public async Task<NotificationListResponse> ListAsync(string? cursor, int limit = 25, bool? unreadOnly = null)
     {

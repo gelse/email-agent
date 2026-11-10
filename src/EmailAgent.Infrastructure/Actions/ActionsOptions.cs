@@ -12,5 +12,5 @@ public sealed class ActionsOptions
     /// Unapproved <c>pending_actions</c> requests lapse at
     /// <c>requested_at + PendingConfirmationExpiry</c>. Default 7 days (§12).
     /// </summary>
-    public TimeSpan PendingConfirmationExpiry { get; set; } = TimeSpan.FromDays(7);
+    public TimeSpan PendingConfirmationExpiry { get; init; } = TimeSpan.FromDays(7);
 }

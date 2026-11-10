@@ -22,18 +22,15 @@ namespace EmailAgent.IntegrationTests.Actions;
 /// Transaction semantics are exercised on real Postgres.
 /// </summary>
 [Collection("Postgres")]
-public sealed class ActionDispatcherIntegrationTests
+public sealed class ActionDispatcherIntegrationTests(PostgresFixture postgres)
 {
     private static readonly SemaphoreSlim MigrationGate = new(1, 1);
     private static bool _migrated;
-    private readonly PostgresFixture _postgres;
-
-    public ActionDispatcherIntegrationTests(PostgresFixture postgres) => _postgres = postgres;
 
     private EmailAgentDbContext CreateDb()
     {
         var opts = new DbContextOptionsBuilder<EmailAgentDbContext>()
-            .UseNpgsql(_postgres.ConnectionString)
+            .UseNpgsql(postgres.ConnectionString)
             .Options;
         return new EmailAgentDbContext(opts);
     }

@@ -25,12 +25,8 @@ public interface IUserBlobCrypto
 }
 
 /// <inheritdoc />
-public sealed class UserBlobCrypto : IUserBlobCrypto
+public sealed class UserBlobCrypto(IEncryptionService encryption) : IUserBlobCrypto
 {
-    private readonly IEncryptionService _encryption;
-
-    public UserBlobCrypto(IEncryptionService encryption) => _encryption = encryption;
-
     /// <inheritdoc />
     public JsonElement Decrypt(
         Guid userId, byte[] ciphertext, byte[] nonce, ReadOnlyMemory<byte> userDek,
@@ -39,7 +35,7 @@ public sealed class UserBlobCrypto : IUserBlobCrypto
         var dek = userDek.ToArray();
         try
         {
-            var plaintext = _encryption.UnwrapWithUserDek(userId, dek, ciphertext, nonce, ct);
+            var plaintext = encryption.UnwrapWithUserDek(userId, dek, ciphertext, nonce, ct);
             try
             {
                 using var doc = JsonDocument.Parse(plaintext);
@@ -67,7 +63,7 @@ public sealed class UserBlobCrypto : IUserBlobCrypto
             var plaintext = JsonSerializer.SerializeToUtf8Bytes(value);
             try
             {
-                var wrapped = _encryption.WrapWithUserDek(userId, dek, plaintext, ct);
+                var wrapped = encryption.WrapWithUserDek(userId, dek, plaintext, ct);
                 return (wrapped.Ciphertext, wrapped.Nonce);
             }
             finally

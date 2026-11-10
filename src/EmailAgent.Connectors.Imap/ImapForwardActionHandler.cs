@@ -19,13 +19,9 @@ namespace EmailAgent.Connectors.Imap;
 /// <c>References</c>). Dry-run produces a would-send description without
 /// opening an SMTP session.
 /// </summary>
-public sealed class ImapForwardActionHandler : IActionHandler
+public sealed class ImapForwardActionHandler(ISmtpClientFactory smtpFactory) : IActionHandler
 {
-    private readonly ISmtpClientFactory _smtpFactory;
-
     public ImapForwardActionHandler() : this(new MailKitSmtpClientFactory()) { }
-
-    public ImapForwardActionHandler(ISmtpClientFactory smtpFactory) => _smtpFactory = smtpFactory;
 
     /// <inheritdoc />
     public string TypeId => "imap-forward";
@@ -124,7 +120,7 @@ public sealed class ImapForwardActionHandler : IActionHandler
         try
         {
             var message = BuildMessage(smtp, toMailbox, subject, body);
-            using var client = _smtpFactory.Create();
+            using var client = smtpFactory.Create();
             var secure = smtp.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
             await client.ConnectAsync(smtp.Host, smtp.Port, secure, ct).ConfigureAwait(false);
             await client.AuthenticateAsync(smtp.Username, smtp.Password, ct).ConfigureAwait(false);
@@ -173,14 +169,9 @@ public sealed class ImapForwardActionHandler : IActionHandler
     private static MimeMessage BuildMessage(SmtpConfig smtp, MailboxAddress to, string subject, string body)
     {
         var message = new MimeMessage();
-        if (!string.IsNullOrWhiteSpace(smtp.FromName))
-        {
-            message.From.Add(new MailboxAddress(smtp.FromName, smtp.FromAddress));
-        }
-        else
-        {
-            message.From.Add(MailboxAddress.Parse(smtp.FromAddress));
-        }
+        message.From.Add(!string.IsNullOrWhiteSpace(smtp.FromName)
+            ? new MailboxAddress(smtp.FromName, smtp.FromAddress)
+            : MailboxAddress.Parse(smtp.FromAddress));
 
         message.To.Add(to);
         message.Subject = subject;

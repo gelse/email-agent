@@ -19,24 +19,16 @@ public sealed record ActionActor(Guid UserId, string Role, IPAddress? Ip);
 /// enforced on every lookup (foreign id → 404, never 403). Config
 /// read/write requires the M2–M4 interim <c>X-User-Dek</c> (Q-E9).
 /// </summary>
-public sealed class ActionConfigService
+public sealed class ActionConfigService(
+    EmailAgentDbContext db,
+    IPluginRegistry registry,
+    EncryptedActionConfigStore store,
+    IAuditLogger audit)
 {
-    private readonly EmailAgentDbContext _db;
-    private readonly IPluginRegistry _registry;
-    private readonly EncryptedActionConfigStore _store;
-    private readonly IAuditLogger _audit;
-
-    public ActionConfigService(
-        EmailAgentDbContext db,
-        IPluginRegistry registry,
-        EncryptedActionConfigStore store,
-        IAuditLogger audit)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
-        _store = store ?? throw new ArgumentNullException(nameof(store));
-        _audit = audit ?? throw new ArgumentNullException(nameof(audit));
-    }
+    private readonly EmailAgentDbContext _db = db ?? throw new ArgumentNullException(nameof(db));
+    private readonly IPluginRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+    private readonly EncryptedActionConfigStore _store = store ?? throw new ArgumentNullException(nameof(store));
+    private readonly IAuditLogger _audit = audit ?? throw new ArgumentNullException(nameof(audit));
 
     public async Task<PagedResult<ActionConfigRow>> ListAsync(
         ActionActor actor, byte[] dek, string? typeId, string? cursor, int limit, CancellationToken ct)

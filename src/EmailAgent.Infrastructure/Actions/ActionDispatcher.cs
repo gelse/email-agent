@@ -21,7 +21,14 @@ namespace EmailAgent.Infrastructure.Actions;
 /// semantics). A crash after a handler side effect but before commit can
 /// lose the record of an executed action (documented window b, M4T1 Risks).
 /// </summary>
-public sealed class ActionDispatcher : IActionDispatcher
+public sealed class ActionDispatcher(
+    EmailAgentDbContext db,
+    IActionHandlerRegistry handlers,
+    IActionConfigProvider configs,
+    IAuditLogger audit,
+    IOptions<ActionsOptions> options,
+    ILogger<ActionDispatcher> logger)
+    : IActionDispatcher
 {
     private static readonly Meter Meter = new("EmailAgent.Actions", "1.0.0");
     private static readonly Counter<long> ResultCounter =
@@ -29,36 +36,13 @@ public sealed class ActionDispatcher : IActionDispatcher
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    private readonly EmailAgentDbContext _db;
-    private readonly IActionHandlerRegistry _handlers;
-    private readonly IActionConfigProvider _configs;
-    private readonly IAuditLogger _audit;
-    private readonly IOptions<ActionsOptions> _options;
-    private readonly ILogger<ActionDispatcher> _logger;
-
-    public ActionDispatcher(
-        EmailAgentDbContext db,
-        IActionHandlerRegistry handlers,
-        IActionConfigProvider configs,
-        IAuditLogger audit,
-        IOptions<ActionsOptions> options,
-        ILogger<ActionDispatcher> logger)
-    {
-        _db = db;
-        _handlers = handlers;
-        _configs = configs;
-        _audit = audit;
-        _options = options;
-        _logger = logger;
-    }
-
     /// <inheritdoc />
     public async Task<DispatchResult> DispatchAsync(DispatchRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.ToolCalls);
 
-        var agentConfig = await _db.AgentConfigs
+        var agentConfig = await db.AgentConfigs
             .AsNoTracking()
             .FirstOrDefaultAsync(a => a.Id == request.AgentConfigId && a.UserId == request.UserId, ct)
             .ConfigureAwait(false);
@@ -67,7 +51,7 @@ public sealed class ActionDispatcher : IActionDispatcher
             throw new AgentConfigNotFoundException(request.AgentConfigId, request.UserId);
         }
 
-        var processed = await _db.ProcessedMessages
+        var processed = await db.ProcessedMessages
             .FirstOrDefaultAsync(p => p.Id == request.ProcessedMessageId, ct)
             .ConfigureAwait(false);
         if (processed is null)
@@ -94,17 +78,17 @@ public sealed class ActionDispatcher : IActionDispatcher
                 continue;
             }
 
-            var (decision, notification, audit) = await DispatchOneAsync(
+            var (decision, notification, auditEvent) = await DispatchOneAsync(
                     request, agentConfig, i, call.Name, args, now, ct)
                 .ConfigureAwait(false);
 
             decisions.Add(decision);
             if (notification is not null)
             {
-                _db.UserNotifications.Add(notification);
+                db.UserNotifications.Add(notification);
             }
 
-            auditQueue.Add(audit);
+            auditQueue.Add(auditEvent);
             RecordMetric(call.Name, decision.Kind);
 
             if (agentConfig.AbortOnActionFailure && IsFailure(decision.Kind))
@@ -115,9 +99,9 @@ public sealed class ActionDispatcher : IActionDispatcher
 
         MergeActionsExecuted(processed, decisions);
 
-        await using (var tx = await _db.Database.BeginTransactionAsync(ct).ConfigureAwait(false))
+        await using (var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false))
         {
-            await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
             await tx.CommitAsync(ct).ConfigureAwait(false);
         }
 
@@ -128,11 +112,11 @@ public sealed class ActionDispatcher : IActionDispatcher
         {
             try
             {
-                await _audit.LogAsync(evt, ct).ConfigureAwait(false);
+                await audit.LogAsync(evt, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
+                logger.LogError(ex,
                     "Failed to append dispatch audit row action={Action} for processed_message={ProcessedMessageId}.",
                     evt.Action, request.ProcessedMessageId);
             }
@@ -159,7 +143,7 @@ public sealed class ActionDispatcher : IActionDispatcher
         }
 
         // Step 3a: handler.
-        var handler = _handlers.GetHandler(name);
+        var handler = handlers.GetHandler(name);
         if (handler is null)
         {
             var d = Decision(index, name, ActionDecisionKind.HandlerNotFound, null,
@@ -168,7 +152,7 @@ public sealed class ActionDispatcher : IActionDispatcher
         }
 
         // Step 3b: config.
-        var envelope = await _configs.ResolveAsync(request.UserId, name, request.UserDek, ct)
+        var envelope = await configs.ResolveAsync(request.UserId, name, request.UserDek, ct)
             .ConfigureAwait(false);
         if (envelope is null)
         {
@@ -185,7 +169,7 @@ public sealed class ActionDispatcher : IActionDispatcher
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "ValidateArgsAsync threw for action type {TypeId}.", name);
+            logger.LogWarning(ex, "ValidateArgsAsync threw for action type {TypeId}.", name);
             validation = ValidationResult.Failure("args validation failed");
         }
 
@@ -238,7 +222,7 @@ public sealed class ActionDispatcher : IActionDispatcher
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Dry-run ExecuteAsync threw for action type {TypeId}.", name);
+            logger.LogWarning(ex, "Dry-run ExecuteAsync threw for action type {TypeId}.", name);
             var d = Decision(index, name, ActionDecisionKind.Failed, envelope.Id, "dry-run failed", null, null);
             return (d, null, BuildDispatchedAudit(request, index, name, envelope.Id, d));
         }
@@ -248,7 +232,7 @@ public sealed class ActionDispatcher : IActionDispatcher
         int index, string name, ActionConfigEnvelope envelope,
         JsonElement args, DispatchRequest request, DateTimeOffset now)
     {
-        var expiry = _options.Value.PendingConfirmationExpiry;
+        var expiry = options.Value.PendingConfirmationExpiry;
         var id = Guid.NewGuid();
         var pending = new PendingAction
         {
@@ -261,7 +245,7 @@ public sealed class ActionDispatcher : IActionDispatcher
             ExpiresAt = now + expiry,
             CreatedAt = now,
         };
-        _db.PendingActions.Add(pending);
+        db.PendingActions.Add(pending);
         var d = Decision(index, name, ActionDecisionKind.PendingConfirmation, envelope.Id, null, null, id);
         return (d, null, BuildDispatchedAudit(request, index, name, envelope.Id, d));
     }
@@ -285,7 +269,7 @@ public sealed class ActionDispatcher : IActionDispatcher
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "ExecuteAsync threw for action type {TypeId}.", name);
+            logger.LogWarning(ex, "ExecuteAsync threw for action type {TypeId}.", name);
             var d = Decision(index, name, ActionDecisionKind.Failed, envelope.Id, "action failed", null, null);
             return (d, null, BuildDispatchedAudit(request, index, name, envelope.Id, d));
         }
@@ -434,7 +418,7 @@ public sealed class ActionDispatcher : IActionDispatcher
             null);
     }
 
-    private static UserNotification? BuildNotification(
+    private static UserNotification BuildNotification(
         DispatchRequest request, ActionConfigEnvelope envelope, ValidationResult validation)
     {
         var issues = validation.Issues?.Take(10)

@@ -10,16 +10,12 @@ namespace EmailAgent.Api.Actions;
 public sealed record NotificationActor(Guid UserId, string Role, IPAddress? Ip);
 
 /// <summary>M4T3: notification list/read/read-all (ownership-scoped).</summary>
-public sealed class NotificationService
+public sealed class NotificationService(EmailAgentDbContext db)
 {
-    private readonly EmailAgentDbContext _db;
-
-    public NotificationService(EmailAgentDbContext db) => _db = db;
-
     public async Task<PagedResult<UserNotification>> ListAsync(
         NotificationActor actor, bool? unreadOnly, string? cursor, int limit, CancellationToken ct)
     {
-        IQueryable<UserNotification> query = _db.UserNotifications
+        IQueryable<UserNotification> query = db.UserNotifications
             .AsNoTracking()
             .Where(n => n.UserId == actor.UserId);
 
@@ -41,7 +37,7 @@ public sealed class NotificationService
 
     public async Task<UserNotification> MarkReadAsync(NotificationActor actor, Guid id, CancellationToken ct)
     {
-        var row = await _db.UserNotifications
+        var row = await db.UserNotifications
             .FirstOrDefaultAsync(n => n.Id == id && n.UserId == actor.UserId, ct)
             .ConfigureAwait(false)
             ?? throw new NotificationNotFoundException(id);
@@ -49,7 +45,7 @@ public sealed class NotificationService
         if (row.ReadAt is null)
         {
             row.ReadAt = DateTimeOffset.UtcNow;
-            await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
 
         return row;
@@ -58,7 +54,7 @@ public sealed class NotificationService
     public async Task<int> MarkAllReadAsync(NotificationActor actor, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
-        var rows = await _db.UserNotifications
+        var rows = await db.UserNotifications
             .Where(n => n.UserId == actor.UserId && n.ReadAt == null)
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -69,7 +65,7 @@ public sealed class NotificationService
 
         if (rows.Count > 0)
         {
-            await _db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
 
         return rows.Count;

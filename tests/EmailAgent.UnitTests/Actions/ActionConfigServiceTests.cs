@@ -168,9 +168,8 @@ public sealed class ActionConfigServiceTests : IDisposable
         await act.Should().ThrowAsync<NotificationNotFoundException>();
     }
 
-    private sealed class TestDb : EmailAgentDbContext
+    private sealed class TestDb(DbContextOptions<TestDb> options) : EmailAgentDbContext(options)
     {
-        public TestDb(DbContextOptions<TestDb> options) : base(options) { }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);

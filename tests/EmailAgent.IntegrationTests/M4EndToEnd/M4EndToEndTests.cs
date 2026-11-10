@@ -37,21 +37,14 @@ public sealed class M4E2ECollection : ICollectionFixture<PostgresFixture>
 
 [Trait("Category", "M4EndToEnd")]
 [Collection(M4E2ECollection.Name)]
-public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLifetime
+public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture greenmail)
+    : IClassFixture<GreenMailFixture>, IAsyncLifetime
 {
-    private readonly PostgresFixture _postgres;
-    private readonly GreenMailFixture _greenmail;
     private readonly List<Action> _cleanup = new();
-
-    public M4EndToEndTests(PostgresFixture postgres, GreenMailFixture greenmail)
-    {
-        _postgres = postgres;
-        _greenmail = greenmail;
-    }
 
     public async Task InitializeAsync()
     {
-        await _greenmail.PurgeMailAsync();
+        await greenmail.PurgeMailAsync();
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
@@ -63,11 +56,11 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task ExitC1_CreateImapReplyAction_DryRun_RecordsIntent_MailboxEmpty()
     {
-        await _greenmail.PurgeMailAsync();
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        await greenmail.PurgeMailAsync();
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
-        var config = M4TestHarness.GreenmailSmtpConfig(_greenmail);
+        var config = M4TestHarness.GreenmailSmtpConfig(greenmail);
         var created = await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-reply", "My Reply", requireConfirmation: true, dryRunDefault: false, config);
         var actionConfigId = created.GetProperty("id").GetGuid();
@@ -95,7 +88,7 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
             desc.RootElement.GetProperty("subject").GetString().Should().StartWith("Re:");
             desc.RootElement.GetProperty("in_reply_to").GetString().Should().Be(sourceMessage.MessageId);
             desc.RootElement.GetProperty("body_text").GetString().Should().Be("Hello from dry-run");
-            desc.RootElement.GetProperty("smtp").GetProperty("host").GetString().Should().Be(_greenmail.SmtpHost);
+            desc.RootElement.GetProperty("smtp").GetProperty("host").GetString().Should().Be(greenmail.SmtpHost);
         }
 
         // actions_executed_json merged
@@ -118,7 +111,7 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
         audit.Should().ContainSingle(a => JsonDocument.Parse(a.MetadataJson!).RootElement.GetProperty("decision").GetString() == "dry_run");
 
         // mailbox empty
-        (await _greenmail.CountMessagesAsync(GreenMailFixture.Email)).Should().Be(0);
+        (await greenmail.CountMessagesAsync(GreenMailFixture.Email)).Should().Be(0);
     }
 
     // ---------------------------------------------------------------------
@@ -128,12 +121,12 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task ExitC2_InvalidArgs_ProducesInvalidArgsAudit_And_UserNotification()
     {
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
         await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-reply", "Reply", requireConfirmation: true, dryRunDefault: false,
-            M4TestHarness.GreenmailSmtpConfig(_greenmail));
+            M4TestHarness.GreenmailSmtpConfig(greenmail));
         var agent = await M4TestHarness.SeedAgentAsync(factory, host.UserId, "imap-reply");
         var (processedId, sourceMessage) = await M4TestHarness.SeedProcessedMessageAsync(factory, host.UserId);
 
@@ -166,12 +159,12 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task InvalidArgs_NotificationVisibleViaApi()
     {
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
         await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-reply", "Reply", requireConfirmation: true, dryRunDefault: false,
-            M4TestHarness.GreenmailSmtpConfig(_greenmail));
+            M4TestHarness.GreenmailSmtpConfig(greenmail));
         var agent = await M4TestHarness.SeedAgentAsync(factory, host.UserId, "imap-reply");
         var (processedId, sourceMessage) = await M4TestHarness.SeedProcessedMessageAsync(factory, host.UserId);
 
@@ -210,13 +203,13 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task Execute_SendsMail_LandsInGreenmailMailbox_WithThreadingHeaders()
     {
-        await _greenmail.PurgeMailAsync();
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        await greenmail.PurgeMailAsync();
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
         await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-reply", "Reply Send", requireConfirmation: false, dryRunDefault: false,
-            M4TestHarness.GreenmailSmtpConfig(_greenmail));
+            M4TestHarness.GreenmailSmtpConfig(greenmail));
         var agent = await M4TestHarness.SeedAgentAsync(factory, host.UserId, "imap-reply");
         var (processedId, sourceMessage) = await M4TestHarness.SeedProcessedMessageAsync(factory, host.UserId,
             from: GreenMailFixture.Email, messageId: "<orig-123@greenmail.test>", subject: "Original Subject");
@@ -232,7 +225,7 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
         var deadline = DateTime.UtcNow.AddSeconds(20);
         while (DateTime.UtcNow < deadline)
         {
-            mime = await M4TestHarness.TryFetchFirstMessageViaImapAsync(_greenmail);
+            mime = await M4TestHarness.TryFetchFirstMessageViaImapAsync(greenmail);
             if (mime is not null) break;
             await Task.Delay(250);
         }
@@ -254,10 +247,10 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task CrudWriter_And_DispatcherReader_RoundTrip()
     {
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
-        var config = M4TestHarness.GreenmailSmtpConfig(_greenmail);
+        var config = M4TestHarness.GreenmailSmtpConfig(greenmail);
         var created = await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-reply", "RoundTrip", requireConfirmation: false, dryRunDefault: true, config);
         var actionId = created.GetProperty("id").GetGuid();
@@ -267,8 +260,8 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
         var envelope = await provider.ResolveAsync(host.UserId, "imap-reply", host.DekBytes, CancellationToken.None);
         envelope.Should().NotBeNull();
         envelope!.Id.Should().Be(actionId);
-        envelope.Config.GetProperty("host").GetString().Should().Be(_greenmail.SmtpHost);
-        envelope.Config.GetProperty("port").GetInt32().Should().Be(_greenmail.SmtpPort);
+        envelope.Config.GetProperty("host").GetString().Should().Be(greenmail.SmtpHost);
+        envelope.Config.GetProperty("port").GetInt32().Should().Be(greenmail.SmtpPort);
         envelope.Config.GetProperty("username").GetString().Should().Be(GreenMailFixture.Username);
         envelope.Config.GetProperty("password").GetString().Should().Be(GreenMailFixture.Password);
         envelope.Config.GetProperty("from_address").GetString().Should().Be(GreenMailFixture.Email);
@@ -281,10 +274,10 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task ActionsCrud_RoundTrip_NoPassword_CascadeBlob()
     {
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
-        var config = M4TestHarness.GreenmailSmtpConfig(_greenmail);
+        var config = M4TestHarness.GreenmailSmtpConfig(greenmail);
         var created = await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-reply", "CRUD Test", requireConfirmation: true, dryRunDefault: false, config);
         var id = created.GetProperty("id").GetGuid();
@@ -304,8 +297,8 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
             display_name = "CRUD Renamed",
             config = new
             {
-                host = _greenmail.SmtpHost,
-                port = (int)_greenmail.SmtpPort,
+                host = greenmail.SmtpHost,
+                port = (int)greenmail.SmtpPort,
                 use_ssl = false,
                 username = GreenMailFixture.Username,
                 password = "",
@@ -355,7 +348,7 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task Notifications_MarkRead_AndReadAll()
     {
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
         var n1 = await M4TestHarness.SeedNotificationAsync(factory, host.UserId, "a");
@@ -393,7 +386,7 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task WhitelistRejection_Recorded_NoNotification()
     {
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
         // Agent allows imap-reply, but we dispatch imap-forward
@@ -418,16 +411,16 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task MultiAction_AbortOnFailure_BothWays()
     {
-        await _greenmail.PurgeMailAsync();
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        await greenmail.PurgeMailAsync();
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
         await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-reply", "Reply", requireConfirmation: false, dryRunDefault: false,
-            M4TestHarness.GreenmailSmtpConfig(_greenmail));
+            M4TestHarness.GreenmailSmtpConfig(greenmail));
         await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-forward", "Fwd", requireConfirmation: false, dryRunDefault: false,
-            M4TestHarness.GreenmailSmtpConfig(_greenmail));
+            M4TestHarness.GreenmailSmtpConfig(greenmail));
 
         var source = new SourceMessageSnapshot("uid-1", "<m1@test>", "Subj", GreenMailFixture.Email, null, null, null, "hi");
         DispatchToolCall[] calls =
@@ -447,7 +440,7 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
         r1.Decisions[2].Kind.Should().Be(ActionDecisionKind.Executed);
 
         // abort_on_action_failure=true: fail on second → third SkippedAbort
-        await _greenmail.PurgeMailAsync();
+        await greenmail.PurgeMailAsync();
         var (agentAbort, pm2, _) = await M4TestHarness.SeedAgentAndProcessedAsync(factory, host.UserId, abortOnFailure: true,
             allowed: ["imap-reply", "imap-forward"]);
         var r2 = await M4TestHarness.DispatchAsync(factory, host.UserId, host.DekBytes, agentAbort.Id, pm2, calls, source);
@@ -464,11 +457,11 @@ public sealed class M4EndToEndTests : IClassFixture<GreenMailFixture>, IAsyncLif
     [Fact]
     public async Task AuditChain_AfterM4Flow_StillValid()
     {
-        var host = await M4TestHarness.CreateHostAsync(_postgres, _greenmail);
+        var host = await M4TestHarness.CreateHostAsync(postgres, greenmail);
         await using var factory = host.Factory;
 
         // Exercise CRUD (create/update/delete) + dispatch (dispatched + invalid_args)
-        var config = M4TestHarness.GreenmailSmtpConfig(_greenmail);
+        var config = M4TestHarness.GreenmailSmtpConfig(greenmail);
         var created = await M4TestHarness.CreateActionViaHttpAsync(
             host, "imap-reply", "Chain Test", requireConfirmation: false, dryRunDefault: true, config);
         var id = created.GetProperty("id").GetGuid();

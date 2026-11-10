@@ -22,7 +22,7 @@
 </div>
 
 @code {
-    [Parameter, EditorRequired] public ActionConfigDto Action { get; set; } = default!;
+    [Parameter, EditorRequired] public ActionConfigDto Action { get; set; } = null!;
     [Parameter, EditorRequired] public EventCallback OnCancel { get; set; }
     [Parameter, EditorRequired] public EventCallback OnDeleted { get; set; }
 
