@@ -24,7 +24,7 @@ namespace EmailAgent.IntegrationTests.M3EndToEnd;
 
 [Trait("Category", "M3EndToEnd")]
 [Collection(M3E2ECollection.Name)]
-public sealed class UserModelEndpointsTests : IAsyncLifetime
+public sealed class UserModelEndpointsTests(PostgresFixture postgres) : IAsyncLifetime
 {
     /// <summary>Seeded base_url — never contacted, and deliberately not a real host.</summary>
     private const string SeededBaseUrl = "http://m3t7-openai-mock.invalid/v1";
@@ -37,10 +37,7 @@ public sealed class UserModelEndpointsTests : IAsyncLifetime
         "model_name",
     ];
 
-    private readonly PostgresFixture _postgres;
-    private readonly List<string> _markers = new();
-
-    public UserModelEndpointsTests(PostgresFixture postgres) => _postgres = postgres;
+    private readonly List<string> _markers = [];
 
     // -----------------------------------------------------------------------
     // The task's own fact (Acceptance criterion: reduced DTO, no admin fields)
@@ -108,7 +105,7 @@ public sealed class UserModelEndpointsTests : IAsyncLifetime
         typed.Items[0].DisplayName.Should().Be($"{host.Marker} pass enabled");
         typeof(EmailAgent.Api.Endpoints.UserModelDto)
             .GetProperties().Select(property => property.Name)
-            .Should().BeEquivalentTo(new[] { "Id", "DisplayName", "Provider", "ModelName" },
+            .Should().BeEquivalentTo(["Id", "DisplayName", "Provider", "ModelName"],
                 "the server-side DTO itself has exactly four members");
     }
 
@@ -221,7 +218,7 @@ public sealed class UserModelEndpointsTests : IAsyncLifetime
         var fullBody = await AccountTestHost.ReadJsonAsync(full);
         fullBody.GetProperty("items").EnumerateArray()
             .Select(item => item.GetProperty("id").GetGuid())
-            .Should().Equal(new[] { first, second },
+            .Should().Equal([first, second],
                 "two seeded rows, oldest first — the picker's stable rendering order");
     }
 
@@ -237,7 +234,7 @@ public sealed class UserModelEndpointsTests : IAsyncLifetime
     {
         foreach (var marker in _markers)
         {
-            await M3TestHarness.CleanupAsync(_postgres, marker);
+            await M3TestHarness.CleanupAsync(postgres, marker);
         }
     }
 
@@ -253,6 +250,6 @@ public sealed class UserModelEndpointsTests : IAsyncLifetime
     {
         var marker = M3TestHarness.NewMarker();
         _markers.Add(marker);
-        return M3TestHarness.CreateHostAsync(_postgres, marker);
+        return M3TestHarness.CreateHostAsync(postgres, marker);
     }
 }

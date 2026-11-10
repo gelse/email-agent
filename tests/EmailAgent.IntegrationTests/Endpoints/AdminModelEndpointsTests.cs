@@ -45,7 +45,8 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 
 [Trait("Category", "M3T3")]
 [Collection("Postgres")]
-public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
+public class AdminModelEndpointsTests(OpenAIMockFixture fixture, PostgresFixture postgres)
+    : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
 {
     /// <summary>Throwaway integration-test api_key (never a real credential).</summary>
     private const string ApiKey = "sk-test-redacted-m3t3";
@@ -69,8 +70,6 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         "price_per_1k_output_usd",
     ];
 
-    private readonly OpenAIMockFixture _fixture;
-    private readonly PostgresFixture _postgres;
     private string? _marker;
 
     /// <summary>
@@ -80,12 +79,6 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
     /// end state. Read per call by <see cref="SabotageAuditLogger"/>.
     /// </summary>
     private string? _sabotageAction;
-
-    public AdminModelEndpointsTests(OpenAIMockFixture fixture, PostgresFixture postgres)
-    {
-        _fixture = fixture;
-        _postgres = postgres;
-    }
 
     // -----------------------------------------------------------------------
     // POST /v1/admin/models
@@ -115,7 +108,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
             modelId = dto.GetProperty("id").GetGuid();
             dto.GetProperty("display_name").GetString().Should().Be($"{host.Marker} model");
             dto.GetProperty("provider").GetString().Should().Be(Provider);
-            dto.GetProperty("base_url").GetString().Should().Be(_fixture.BaseUrl);
+            dto.GetProperty("base_url").GetString().Should().Be(fixture.BaseUrl);
             dto.GetProperty("model_name").GetString().Should().Be(host.Marker);
             dto.GetProperty("enabled").GetBoolean().Should().BeTrue();
             dto.GetProperty("tool_calling_probe_result").GetString().Should().Be("Pass");
@@ -166,7 +159,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         await using var factory = host.Factory;
         using var client = host.Client;
         var marker = host.Marker;
-        await _fixture.SetScenarioAsync("probe-fail");
+        await fixture.SetScenarioAsync("probe-fail");
         var requestsBefore = TotalRequests();
         var keyBlobsBefore = await CountModelKeyBlobsAsync(factory);
 
@@ -264,7 +257,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         AssertDtoShape(dto);
         dto.GetProperty("id").GetGuid().Should().Be(modelId);
         dto.GetProperty("display_name").GetString().Should().Be(created.GetProperty("display_name").GetString());
-        dto.GetProperty("base_url").GetString().Should().Be(_fixture.BaseUrl);
+        dto.GetProperty("base_url").GetString().Should().Be(fixture.BaseUrl);
         dto.GetProperty("tool_calling_probe_result").GetString().Should().Be("Pass");
 
         // Typed-record deserialization: the published ModelDto binds the body
@@ -308,7 +301,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         var before = (await FindRowAsync(factory, modelId))!;
         before.Should().NotBeNull("the created row must exist before the patch");
 
-        await _fixture.SetScenarioAsync("probe-fail");
+        await fixture.SetScenarioAsync("probe-fail");
         var requestsBefore = TotalRequests();
 
         using var response = await client.SendAsync(AdminTestHost.Request(
@@ -456,7 +449,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         var row = (await FindRowAsync(factory, modelId))!;
         row.Should().NotBeNull("the patched row must exist");
         row.DisplayName.Should().Be($"{marker} renamed");
-        row.BaseUrl.Should().Be(_fixture.BaseUrl, "only the patched member changes");
+        row.BaseUrl.Should().Be(fixture.BaseUrl, "only the patched member changes");
 
         var auditRow = await SingleAuditAsync(factory, AuditActions.UpdateModel, modelId);
         auditRow.MetadataJson.Should().NotContain("api_key", "no key member was part of this patch");
@@ -562,7 +555,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         var pageOne = JsonDocument.Parse(pageOneRaw).RootElement.Clone();
         pageOne.GetProperty("items").EnumerateArray()
             .Select(item => item.GetProperty("id").GetGuid()).Should().Equal(
-                new[] { one, two },
+                [one, two],
                 "§13.13: (created_at DESC, id DESC) — newest first");
         pageOne.TryGetProperty("next_cursor", out var cursorToken).Should().BeTrue(
             "a further page exists, so next_cursor is present");
@@ -622,7 +615,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         var enabledPage = await AccountTestHost.ReadJsonAsync(enabledResponse);
         enabledPage.GetProperty("items").EnumerateArray()
             .Select(item => item.GetProperty("id").GetGuid())
-            .Should().BeEquivalentTo(new[] { enabledA, enabledB });
+            .Should().BeEquivalentTo([enabledA, enabledB]);
         enabledPage.GetProperty("items").EnumerateArray()
             .All(item => item.GetProperty("enabled").GetBoolean()).Should().BeTrue(
                 "filter[enabled]=true must never return a disabled row");
@@ -656,7 +649,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         var page = await AccountTestHost.ReadJsonAsync(response);
         var items = page.GetProperty("items").EnumerateArray().ToList();
         items.Select(item => item.GetProperty("id").GetGuid())
-            .Should().BeEquivalentTo(new[] { openAiA, openAiB });
+            .Should().BeEquivalentTo([openAiA, openAiB]);
         items.Select(item => item.GetProperty("provider").GetString())
             .Should().OnlyContain(provider => provider == Provider);
     }
@@ -809,10 +802,10 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
             return;
         }
 
-        await AccountTestHost.MigrateAsync(_postgres);
+        await AccountTestHost.MigrateAsync(postgres);
         await using var db = new EmailAgentDbContext(
             new DbContextOptionsBuilder<EmailAgentDbContext>()
-                .UseNpgsql(_postgres.ConnectionString)
+                .UseNpgsql(postgres.ConnectionString)
                 .Options);
 
         var rows = await db.ModelCatalog.AsNoTracking()
@@ -859,29 +852,20 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
     /// already made — exactly the atomicity the task requires of
     /// create/PATCH/DELETE.
     /// </summary>
-    private sealed class SabotageAuditLogger : IAuditLogger
+    private sealed class SabotageAuditLogger(IAuditLogger inner, Func<string, bool> shouldFail) : IAuditLogger
     {
-        private readonly IAuditLogger _inner;
-        private readonly Func<string, bool> _shouldFail;
-
-        public SabotageAuditLogger(IAuditLogger inner, Func<string, bool> shouldFail)
-        {
-            _inner = inner;
-            _shouldFail = shouldFail;
-        }
-
         public Task LogAsync(AuditEvent evt, CancellationToken ct)
         {
-            if (_shouldFail(evt.Action))
+            if (shouldFail(evt.Action))
             {
                 throw new InvalidOperationException(
                     $"M3T3 test sabotage: the '{evt.Action}' audit write failed.");
             }
 
-            return _inner.LogAsync(evt, ct);
+            return inner.LogAsync(evt, ct);
         }
 
-        public Task<long?> VerifyChainAsync(CancellationToken ct) => _inner.VerifyChainAsync(ct);
+        public Task<long?> VerifyChainAsync(CancellationToken ct) => inner.VerifyChainAsync(ct);
     }
 
     /// <summary>
@@ -895,9 +879,9 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         _marker = marker;
 
         // Deterministic mock state before any probe can run (one fixture per class).
-        await _fixture.SetScenarioAsync("probe-pass");
+        await fixture.SetScenarioAsync("probe-pass");
 
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var factory = ApiTestFactory.Create(connectionString)
             .WithWebHostBuilder(builder => builder.ConfigureServices(services =>
             {
@@ -909,7 +893,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
                 // scenario (recorded deviation: one fixture per class, not a
                 // second mock instance).
                 services.RemoveAll<Func<IAgentEngine>>();
-                Func<IAgentEngine> engine = () => new OpenAICompatibleAgentEngine(_fixture.Client);
+                Func<IAgentEngine> engine = () => new OpenAICompatibleAgentEngine(fixture.Client);
                 services.AddSingleton(engine);
 
                 // Review S3 seam: wrap the REAL audit sink so a test can make
@@ -945,7 +929,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
         {
             display_name = displayName ?? $"{marker} model",
             provider = Provider,
-            base_url = baseUrl ?? _fixture.BaseUrl,
+            base_url = baseUrl ?? fixture.BaseUrl,
             model_name = modelName ?? marker,
             api_key = apiKey,
             price_per_1k_input_usd = 0.0015m,
@@ -1001,7 +985,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
     }
 
     /// <summary>Engine round-trips against this fixture's mock, summed over scenarios.</summary>
-    private int TotalRequests() => _fixture.RequestCounts.Values.Sum();
+    private int TotalRequests() => fixture.RequestCounts.Values.Sum();
 
     // -----------------------------------------------------------------------
     // Database helpers
@@ -1026,7 +1010,7 @@ public class AdminModelEndpointsTests : IClassFixture<OpenAIMockFixture>, IAsync
                 Id = id,
                 DisplayName = displayName,
                 Provider = provider,
-                BaseUrl = _fixture.BaseUrl,
+                BaseUrl = fixture.BaseUrl,
                 ModelName = modelName ?? host.Marker,
                 Enabled = enabled,
                 CreatedBy = host.AdminId,

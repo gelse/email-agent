@@ -36,7 +36,7 @@ namespace EmailAgent.IntegrationTests.M2EndToEnd;
 /// </remarks>
 [Trait("Category", "M2EndToEnd")]
 [Collection(M2E2ECollection.Name)]
-public sealed class PluginLoaderTamperTests
+public sealed class PluginLoaderTamperTests(PostgresFixture postgres)
 {
     private const string CompanionDll = "Fabricated.Plugin.dll";
 
@@ -46,16 +46,12 @@ public sealed class PluginLoaderTamperTests
     /// slot, so it never appears in <c>MessageSourceIds</c>).
     /// </summary>
     private static readonly string[] RemainingDefaultPluginIds =
-        { "telegram-send" };
-
-    private readonly PostgresFixture _postgres;
-
-    public PluginLoaderTamperTests(PostgresFixture postgres) => _postgres = postgres;
+        ["telegram-send"];
 
     [Fact]
     public async Task TamperedPlugin_RefusedAtLoadTime_AndRegistryReturnsNull()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var signingKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var directory = CreatePluginsDirectory();
         var bytes = ImapAssemblyBytes();
@@ -141,14 +137,8 @@ public sealed class PluginLoaderTamperTests
     /// </summary>
     private static string BuildManifest(string pluginId, string version)
     {
-        var manifest = new Dictionary<string, object?>
+        var manifest = new Dictionary<string, object?>()
         {
-            ["plugin_id"] = pluginId,
-            ["version"] = version,
-            ["assembly"] = CompanionDll,
-            ["type"] = "EmailAgent.Connectors.Imap.ImapMessageSource",
-            ["capabilities"] = new[] { "processed_messages_write" },
-            ["http_allowlist"] = Array.Empty<string>(),
             ["notes"] = "M2T7 integration-test tampered drop-in (not a shipped plugin).",
         };
         return JsonSerializer.Serialize(manifest);

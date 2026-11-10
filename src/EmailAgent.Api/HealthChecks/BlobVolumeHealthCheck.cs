@@ -2,21 +2,15 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace EmailAgent.Api.HealthChecks;
 
-public sealed class BlobVolumeHealthCheck : IHealthCheck
+public sealed class BlobVolumeHealthCheck(IConfiguration configuration) : IHealthCheck
 {
-    private readonly IConfiguration _configuration;
-
-    public BlobVolumeHealthCheck(IConfiguration configuration)
-    {
-        _configuration = configuration;
-    }
 
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        var path = _configuration["Blobs:Path"]
-            ?? _configuration["Blobs__Path"];
+        var path = configuration["Blobs:Path"]
+            ?? configuration["Blobs__Path"];
 
         if (string.IsNullOrWhiteSpace(path))
         {

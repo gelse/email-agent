@@ -35,20 +35,13 @@ namespace EmailAgent.IntegrationTests.Auth;
 /// headers/policies) are exercised over the wire.
 /// </summary>
 [Collection("Postgres")]
-public class AuthSmokeTests
+public class AuthSmokeTests(PostgresFixture postgres)
 {
     /// <summary>Ephemeral test key — never a real secret (AGENTS.md).</summary>
     private const string TestSigningKey = "m1t4-integration-test-signing-key-0123456789";
 
     private static readonly SemaphoreSlim MigrationGate = new(1, 1);
     private static string? _migratedConnectionString;
-
-    private readonly PostgresFixture _postgres;
-
-    public AuthSmokeTests(PostgresFixture postgres)
-    {
-        _postgres = postgres;
-    }
 
     [Fact]
     public async Task Jwt_Issue_Then_Validate_Succeeds_With_Correct_Issuer_Audience()
@@ -59,7 +52,7 @@ public class AuthSmokeTests
 
         var userId = Guid.NewGuid();
         var user = NewUser(userId, "jwt-issue@example.test");
-        var token = issuer.IssueAccessToken(user, new[] { "User" });
+        var token = issuer.IssueAccessToken(user, ["User"]);
 
         token.Should().NotBeNullOrWhiteSpace();
 
@@ -121,7 +114,7 @@ public class AuthSmokeTests
 
         // A fresh access token can be minted for the same user after rotation.
         var user = await LoadUserAsync(factory, userId);
-        var accessToken = issuer.IssueAccessToken(user, new[] { "User" });
+        var accessToken = issuer.IssueAccessToken(user, ["User"]);
         accessToken.Should().NotBeNullOrWhiteSpace();
     }
 
@@ -291,7 +284,7 @@ public class AuthSmokeTests
         using var scope = factory.Services.CreateScope();
         var issuer = scope.ServiceProvider.GetRequiredService<IJwtTokenIssuer>();
         var user = NewUser(Guid.NewGuid(), "headers@example.test");
-        var token = issuer.IssueAccessToken(user, new[] { "User" });
+        var token = issuer.IssueAccessToken(user, ["User"]);
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
@@ -451,7 +444,7 @@ public class AuthSmokeTests
     /// </summary>
     private async Task<string> MigrateAsync()
     {
-        var connectionString = _postgres.ConnectionString;
+        var connectionString = postgres.ConnectionString;
 
         await MigrationGate.WaitAsync();
         try

@@ -41,7 +41,7 @@ namespace EmailAgent.Infrastructure.Identity;
 /// view-once enforcement is M1T7/M1T8). Never log the raw value.
 /// </para>
 /// </remarks>
-public sealed class OtpService : IOtpService
+public sealed class OtpService(EmailAgentDbContext db, IOptions<OtpOptions> options, ILogger<OtpService> logger) : IOtpService
 {
     /// <summary>Q-A2: 16 chars × 5 bits = 80 bits of entropy.</summary>
     private const int RawOtpCharLength = 16;
@@ -59,21 +59,6 @@ public sealed class OtpService : IOtpService
     private const int OtpHashIterations = 100_000;
     private const int StoredHashByteLength = OtpSaltByteLength + OtpHashByteLength;
 
-    private readonly EmailAgentDbContext _db;
-    private readonly ILogger<OtpService> _logger;
-    private readonly TimeSpan _lifetime;
-
-    public OtpService(
-        EmailAgentDbContext db,
-        IOptions<OtpOptions> options,
-        ILogger<OtpService> logger)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _ = options ?? throw new ArgumentNullException(nameof(options));
-        _lifetime = options.Value.Lifetime;
-    }
-
     public async Task<IssuedOtp> IssueAsync(Guid userId, Guid createdByAdminId, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
@@ -83,7 +68,7 @@ public sealed class OtpService : IOtpService
             Id = Guid.NewGuid(),
             UserId = userId,
             OtpHash = HashOtp(rawOtp),
-            ExpiresAt = now + _lifetime,
+            ExpiresAt = now + options.Value.Lifetime,
             UsedAt = null,
             RevokedAt = null,
             CreatedBy = createdByAdminId,
@@ -92,12 +77,12 @@ public sealed class OtpService : IOtpService
 
         // Explicit transaction per the M1T5 task step (symmetrical with
         // Verify/Regenerate; a lone INSERT is already atomic).
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-        _db.OneTimePasswords.Add(entity);
-        await _db.SaveChangesAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        db.OneTimePasswords.Add(entity);
+        await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
 
-        _logger.LogInformation(
+        logger.LogInformation(
             "OTP {OtpId} issued for user {UserId} by admin {AdminId}; expires {ExpiresAt}.",
             entity.Id, entity.UserId, createdByAdminId, entity.ExpiresAt);
 
@@ -116,13 +101,13 @@ public sealed class OtpService : IOtpService
             return false;
         }
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         // Most-recent active row wins (the single-active invariant above).
         // Untracked: the consume step must rest on committed DB truth, never
         // on whatever this context happens to have tracked.
         var now = DateTimeOffset.UtcNow;
-        var entity = await _db.OneTimePasswords
+        var entity = await db.OneTimePasswords
             .AsNoTracking()
             .Where(o => o.UserId == userId
                         && o.UsedAt == null
@@ -145,7 +130,7 @@ public sealed class OtpService : IOtpService
         // window: an admin's concurrent Regenerate/RevokeAll must leave a
         // revoked OTP unable to consume itself (review WARNING-1; mirrors
         // RefreshTokenStore's consume guard).
-        var consumed = await _db.OneTimePasswords
+        var consumed = await db.OneTimePasswords
             .Where(o => o.Id == entity.Id
                         && o.UsedAt == null
                         && o.RevokedAt == null
@@ -165,14 +150,14 @@ public sealed class OtpService : IOtpService
             Id = Guid.NewGuid(),
             UserId = userId,
             OtpHash = HashOtp(rawOtp),
-            ExpiresAt = now + _lifetime,
+            ExpiresAt = now + options.Value.Lifetime,
             UsedAt = null,
             RevokedAt = null,
             CreatedBy = createdByAdminId,
             CreatedAt = now,
         };
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         // Serialize per user before anything else (review WARNING-2). The
         // revoke UPDATE below only locks rows it actually matches, so two
@@ -180,7 +165,7 @@ public sealed class OtpService : IOtpService
         // expired prior OTP) would both insert and leave two active rows.
         // Locking the users row for the transaction makes the revoke+insert
         // pair strictly one-at-a-time per user; the FK guarantees the row.
-        await _db.Database.ExecuteSqlRawAsync(
+        await db.Database.ExecuteSqlRawAsync(
             "SELECT id FROM users WHERE id = {0} FOR UPDATE",
             new object[] { userId },
             ct);
@@ -188,18 +173,18 @@ public sealed class OtpService : IOtpService
         // Q-A9: revoke every still-live OTP, then insert its successor —
         // both statements commit atomically so no observer sees zero or two
         // active OTPs for the user.
-        await _db.OneTimePasswords
+        await db.OneTimePasswords
             .Where(o => o.UserId == userId
                         && o.UsedAt == null
                         && o.RevokedAt == null
                         && o.ExpiresAt > now)
             .ExecuteUpdateAsync(s => s.SetProperty(o => o.RevokedAt, now), ct);
 
-        _db.OneTimePasswords.Add(entity);
-        await _db.SaveChangesAsync(ct);
+        db.OneTimePasswords.Add(entity);
+        await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
 
-        _logger.LogInformation(
+        logger.LogInformation(
             "OTP {OtpId} reissued for user {UserId} by admin {AdminId}; expires {ExpiresAt}.",
             entity.Id, entity.UserId, createdByAdminId, entity.ExpiresAt);
 
@@ -212,7 +197,7 @@ public sealed class OtpService : IOtpService
 
         // Q-LP2 (delete-account, M6a/M7a) will call this; ExecuteUpdate's
         // return value is the count of newly revoked rows.
-        return await _db.OneTimePasswords
+        return await db.OneTimePasswords
             .Where(o => o.UserId == userId
                         && o.UsedAt == null
                         && o.RevokedAt == null

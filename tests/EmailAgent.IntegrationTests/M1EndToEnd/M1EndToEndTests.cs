@@ -34,16 +34,12 @@ namespace EmailAgent.IntegrationTests.M1EndToEnd;
 /// </summary>
 [Trait("Category", "M1EndToEnd")]
 [Collection("Postgres")]
-public class M1EndToEndTests
+public class M1EndToEndTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public M1EndToEndTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task Admin_CreatesUser_AliceLogsInAndCompletesFirstLogin_Success()
     {
-        var (factory, client) = await Harness.CreateAsync(_postgres);
+        var (factory, client) = await Harness.CreateAsync(postgres);
         await using var disposableFactory = factory;
 
         var adminEmail = Unique("admin");
@@ -152,16 +148,15 @@ public class M1EndToEndTests
         var actions = (await AccountTestHost.AuditRowsAsync(factory, aliceId))
             .Select(row => row.Action)
             .ToList();
-        actions.Should().Contain(new[]
-        {
+        actions.Should().Contain([
             AuditActions.AdminCreateUser,
             AuditActions.AdminOtpIssued,
             AuditActions.OtpLoginSuccess,
             AuditActions.ChangePassword,
             AuditActions.SetPassphrase,
             AuditActions.Logout,
-            AuditActions.LoginSuccess,
-        });
+            AuditActions.LoginSuccess
+        ]);
         (await AccountTestHost.AuditRowsAsync(factory, aliceId))
             .Should().OnlyContain(row => row.Hmac != null && row.Hmac.Length == 32);
     }
@@ -169,7 +164,7 @@ public class M1EndToEndTests
     [Fact]
     public async Task SetPassphrase_PersistsDekWrapped_AndUnwrapsWithSamePassphrase()
     {
-        var (factory, client) = await Harness.CreateAsync(_postgres);
+        var (factory, client) = await Harness.CreateAsync(postgres);
         await using var disposableFactory = factory;
 
         // Clean set → re-derive → unwrap round-trip. (The wrong-passphrase
@@ -238,7 +233,7 @@ public class M1EndToEndTests
     [Fact]
     public async Task AuditLog_ContainsAllAuthEvents_WithValidHmacChain()
     {
-        var (factory, client) = await Harness.CreateAsync(_postgres);
+        var (factory, client) = await Harness.CreateAsync(postgres);
         await using var disposableFactory = factory;
 
         var adminEmail = Unique("audit-admin");
@@ -295,15 +290,14 @@ public class M1EndToEndTests
 
         // Step 11: rows for each event, non-null 32-byte hmac + actor + ip.
         var aliceRows = await AccountTestHost.AuditRowsAsync(factory, aliceId);
-        aliceRows.Select(r => r.Action).Should().Contain(new[]
-        {
+        aliceRows.Select(r => r.Action).Should().Contain([
             AuditActions.AdminCreateUser,
             AuditActions.AdminOtpIssued,
             AuditActions.OtpLoginSuccess,
             AuditActions.ChangePassword,
             AuditActions.SetPassphrase,
-            AuditActions.Logout,
-        });
+            AuditActions.Logout
+        ]);
         aliceRows.Should().OnlyContain(r =>
             r.ActorUserId != null
             && r.Ip != null

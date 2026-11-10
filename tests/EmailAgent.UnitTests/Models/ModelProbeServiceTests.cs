@@ -336,7 +336,7 @@ public class ModelProbeServiceTests
 
         // Binding against an absent section keeps the SQ-M3-3 default.
         using var provider = BuildOptionsProvider(
-            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
+            new ConfigurationBuilder().AddInMemoryCollection([]).Build());
         provider.GetRequiredService<IOptions<ModelOptions>>().Value.ProbeReprobeWindow
             .Should().Be(new TimeSpan(1, 0, 0));
     }

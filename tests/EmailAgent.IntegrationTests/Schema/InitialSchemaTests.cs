@@ -20,17 +20,10 @@ public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>
 /// column types, nullability, unique/check constraints, partial indexes).
 /// </summary>
 [Collection("Postgres")]
-public class InitialSchemaTests
+public class InitialSchemaTests(PostgresFixture postgres)
 {
     private static readonly SemaphoreSlim MigrationGate = new(1, 1);
     private static string? _migratedConnectionString;
-
-    private readonly PostgresFixture _postgres;
-
-    public InitialSchemaTests(PostgresFixture postgres)
-    {
-        _postgres = postgres;
-    }
 
     [Fact]
     public async Task Extensions_Citext_And_Pgcrypto_AreInstalled()
@@ -219,7 +212,7 @@ public class InitialSchemaTests
     /// </summary>
     private async Task<string> MigrateAsync()
     {
-        var connectionString = _postgres.ConnectionString;
+        var connectionString = postgres.ConnectionString;
 
         await MigrationGate.WaitAsync();
         try

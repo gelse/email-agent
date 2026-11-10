@@ -19,18 +19,14 @@ namespace EmailAgent.IntegrationTests.Connectors.OpenAI;
 /// </summary>
 [Trait("Category", "M3T1")]
 [Collection("Postgres")]
-public class OpenAICompatibleAgentEngineTests : IClassFixture<OpenAIMockFixture>
+public class OpenAICompatibleAgentEngineTests(OpenAIMockFixture fixture) : IClassFixture<OpenAIMockFixture>
 {
-    private readonly OpenAIMockFixture _fixture;
-
-    public OpenAICompatibleAgentEngineTests(OpenAIMockFixture fixture) => _fixture = fixture;
-
     [Fact]
     public async Task OpenAICompatibleAgentEngine_CompleteAsync_HappyNonStreaming_ReturnsTextAndTokens()
     {
-        await _fixture.SetScenarioAsync("happy");
-        var engine = new OpenAICompatibleAgentEngine(_fixture.Client);
-        var req = Request(_fixture.CreateConfig());
+        await fixture.SetScenarioAsync("happy");
+        var engine = new OpenAICompatibleAgentEngine(fixture.Client);
+        var req = Request(fixture.CreateConfig());
 
         List<AgentEvent> events = await DrainAsync(
             engine.CompleteAsync(req, CancellationToken.None));
@@ -48,9 +44,9 @@ public class OpenAICompatibleAgentEngineTests : IClassFixture<OpenAIMockFixture>
     [Fact]
     public async Task OpenAICompatibleAgentEngine_CompleteAsync_HappyStreaming_YieldsMultipleTextChunksAndDone()
     {
-        await _fixture.SetScenarioAsync("happy");
-        var engine = new OpenAICompatibleAgentEngine(_fixture.Client);
-        var req = Request(_fixture.CreateConfig());
+        await fixture.SetScenarioAsync("happy");
+        var engine = new OpenAICompatibleAgentEngine(fixture.Client);
+        var req = Request(fixture.CreateConfig());
 
         List<AgentEvent> events = await DrainAsync(
             engine.CompleteAsync(req, new EngineCallOptions(Stream: true), CancellationToken.None));
@@ -70,9 +66,9 @@ public class OpenAICompatibleAgentEngineTests : IClassFixture<OpenAIMockFixture>
     [Fact]
     public async Task OpenAICompatibleAgentEngine_CompleteAsync_HttpError_ThrowsEngineCallException()
     {
-        await _fixture.SetScenarioAsync("error");
-        var engine = new OpenAICompatibleAgentEngine(_fixture.Client);
-        var req = Request(_fixture.CreateConfig());
+        await fixture.SetScenarioAsync("error");
+        var engine = new OpenAICompatibleAgentEngine(fixture.Client);
+        var req = Request(fixture.CreateConfig());
 
         Func<Task> act = async () => await DrainAsync(
             engine.CompleteAsync(req, CancellationToken.None));
@@ -87,11 +83,11 @@ public class OpenAICompatibleAgentEngineTests : IClassFixture<OpenAIMockFixture>
     [Fact]
     public async Task OpenAICompatibleAgentEngine_CompleteAsync_Cancellation_Honored()
     {
-        await _fixture.SetScenarioAsync("happy");
-        var engine = new OpenAICompatibleAgentEngine(_fixture.Client);
-        var req = Request(_fixture.CreateConfig());
+        await fixture.SetScenarioAsync("happy");
+        var engine = new OpenAICompatibleAgentEngine(fixture.Client);
+        var req = Request(fixture.CreateConfig());
         using var cts = new CancellationTokenSource();
-        var events = new List<AgentEvent>();
+        List<AgentEvent> events = [];
 
         Func<Task> act = async () =>
         {
@@ -130,7 +126,7 @@ public class OpenAICompatibleAgentEngineTests : IClassFixture<OpenAIMockFixture>
     /// <summary>Drains an event stream so async-iterator exceptions reach the assertion.</summary>
     private static async Task<List<AgentEvent>> DrainAsync(IAsyncEnumerable<AgentEvent> source)
     {
-        var events = new List<AgentEvent>();
+        List<AgentEvent> events = [];
         await foreach (AgentEvent evt in source)
         {
             events.Add(evt);

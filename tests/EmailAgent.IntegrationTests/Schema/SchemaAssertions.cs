@@ -14,7 +14,7 @@ internal static class SchemaAssertions
 {
     /// <summary>The 12 §6 tables plus refresh_tokens (SQ-1).</summary>
     public static readonly string[] RequiredTables =
-    {
+    [
         "users",
         "one_time_passwords",
         "model_catalog",
@@ -27,8 +27,8 @@ internal static class SchemaAssertions
         "user_notifications",
         "audit_log",
         "encrypted_blobs",
-        "refresh_tokens",
-    };
+        "refresh_tokens"
+    ];
 
     private const string Uuid = "uuid";
     private const string Text = "text";
@@ -249,7 +249,7 @@ internal static class SchemaAssertions
         var extensions = await QueryAsync(
             connectionString,
             "SELECT extname FROM pg_extension WHERE extname IN ('citext', 'pgcrypto')",
-            Array.Empty<(string, object?)>(),
+            [],
             reader => reader.GetString(0));
 
         extensions.Should().Contain("citext")
@@ -261,7 +261,7 @@ internal static class SchemaAssertions
         var tables = await QueryAsync(
             connectionString,
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
-            Array.Empty<(string, object?)>(),
+            [],
             reader => reader.GetString(0));
 
         tables.Should().Contain(table);
@@ -283,7 +283,7 @@ internal static class SchemaAssertions
                 + "CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END, "
                 + "is_nullable FROM information_schema.columns "
                 + "WHERE table_schema = 'public' AND table_name = @table ORDER BY ordinal_position",
-            new (string, object?)[] { ("@table", table) },
+                [("@table", table)],
             reader => (
                 Name: reader.GetString(0),
                 Type: reader.GetString(1),
@@ -313,7 +313,7 @@ internal static class SchemaAssertions
             "SELECT CASE WHEN data_type = 'USER-DEFINED' THEN udt_name ELSE data_type END "
                 + "FROM information_schema.columns "
                 + "WHERE table_schema = 'public' AND table_name = @table AND column_name = @column",
-            new (string, object?)[] { ("@table", table), ("@column", column) },
+                [("@table", table), ("@column", column)],
             reader => reader.GetString(0));
 
         types.Should().ContainSingle($"{table}.{column} must exist");
@@ -330,7 +330,7 @@ internal static class SchemaAssertions
             connectionString,
             "SELECT is_nullable FROM information_schema.columns "
                 + "WHERE table_schema = 'public' AND table_name = @table AND column_name = @column",
-            new (string, object?)[] { ("@table", table), ("@column", column) },
+                [("@table", table), ("@column", column)],
             reader => reader.GetString(0));
 
         rows.Should().ContainSingle($"{table}.{column} must exist");
@@ -347,7 +347,7 @@ internal static class SchemaAssertions
             connectionString,
             "SELECT COALESCE(column_default, '') FROM information_schema.columns "
                 + "WHERE table_schema = 'public' AND table_name = @table AND column_name = @column",
-            new (string, object?)[] { ("@table", table), ("@column", column) },
+                [("@table", table), ("@column", column)],
             reader => reader.GetString(0));
 
         rows.Should().ContainSingle($"{table}.{column} must exist");
@@ -358,7 +358,7 @@ internal static class SchemaAssertions
     public static async Task AssertUniqueConstraint(
         string connectionString,
         string table,
-        params string[] columns)
+        params IEnumerable<string> columns)
     {
         var constraints = await GetConstraintsAsync(connectionString, table);
 
@@ -373,7 +373,7 @@ internal static class SchemaAssertions
     public static async Task AssertCheckConstraintValues(
         string connectionString,
         string table,
-        params string[] values)
+        params IEnumerable<string> values)
     {
         var constraints = await GetConstraintsAsync(connectionString, table);
 
@@ -393,7 +393,7 @@ internal static class SchemaAssertions
         var definitions = await QueryAsync(
             connectionString,
             "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = @table",
-            new (string, object?)[] { ("@table", table) },
+            [("@table", table)],
             reader => reader.GetString(0));
 
         var match = definitions.FirstOrDefault(
@@ -417,7 +417,7 @@ internal static class SchemaAssertions
         var definitions = await QueryAsync(
             connectionString,
             "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = @table",
-            new (string, object?)[] { ("@table", table) },
+            [("@table", table)],
             reader => reader.GetString(0));
 
         var match = definitions.FirstOrDefault(
@@ -466,7 +466,7 @@ internal static class SchemaAssertions
                 + "WHERE c.conrelid = to_regclass(@table) AND c.contype = 'f'",
             // Quoted so mixed-case tables (AspNet*) survive to_regclass — an
             // unquoted name is lowercased by the parser and resolves to NULL.
-            new (string, object?)[] { ("@table", $"\"{table}\"") },
+            [("@table", $"\"{table}\"")],
             reader => reader.GetString(0));
     }
 
@@ -483,7 +483,7 @@ internal static class SchemaAssertions
                 + "JOIN pg_attribute att ON att.attrelid = c.conrelid AND att.attnum = key_col.attnum), "
                 + "COALESCE(pg_get_expr(c.conbin, c.conrelid), '') "
                 + "FROM pg_constraint c WHERE c.conrelid = to_regclass(@table)",
-            new (string, object?)[] { ("@table", $"\"{table}\"") },
+                [("@table", $"\"{table}\"")],
             reader => new Constraint(
                 Name: reader.GetString(0),
                 Contype: reader.GetString(1),
@@ -506,7 +506,7 @@ internal static class SchemaAssertions
             command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         }
 
-        var results = new List<T>();
+        List<T> results = [];
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {

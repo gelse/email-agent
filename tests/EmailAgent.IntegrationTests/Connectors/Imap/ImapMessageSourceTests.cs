@@ -26,12 +26,8 @@ namespace EmailAgent.IntegrationTests.Connectors.Imap;
 /// ever contacted (AGENTS.md hard constraints).
 /// </remarks>
 [Trait("Category", "M2T4")]
-public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
+public sealed class ImapMessageSourceTests(GreenMailFixture greenmail) : IClassFixture<GreenMailFixture>
 {
-    private readonly GreenMailFixture _greenmail;
-
-    public ImapMessageSourceTests(GreenMailFixture greenmail) => _greenmail = greenmail;
-
     // ---------------------------------------------------------------------
     // ValidateConfigAsync — schema gate, then connect, then authenticate
     // ---------------------------------------------------------------------
@@ -40,10 +36,10 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     public async Task ValidateConfigAsync_HappyPath_ReturnsSuccess()
     {
         var result = await Source().ValidateConfigAsync(
-            _greenmail.CreateConfig(), CancellationToken.None);
+            greenmail.CreateConfig(), CancellationToken.None);
 
         result.Ok.Should().BeTrue(
-            $"the fixture provisions alice/alice on {_greenmail.ImapHost}:{_greenmail.ImapPort} — got: {result.Error}");
+            $"the fixture provisions alice/alice on {greenmail.ImapHost}:{greenmail.ImapPort} — got: {result.Error}");
         result.Error.Should().BeNull();
         result.Issues!.Should().BeNull();
     }
@@ -57,7 +53,7 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     public async Task Imap_ValidateConfigAsync_WrongPassword_ReturnsValidationFailure()
     {
         var result = await Source().ValidateConfigAsync(
-            _greenmail.CreateConfig(password: "definitely-not-the-password"),
+            greenmail.CreateConfig(password: "definitely-not-the-password"),
             CancellationToken.None);
 
         result.Ok.Should().BeFalse();
@@ -73,7 +69,7 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
         // Nothing listens on port 1 of the loopback interface, so the connect fails
         // before any IMAP or TLS traffic — the connection bucket, not the auth one.
         var result = await Source().ValidateConfigAsync(
-            _greenmail.CreateConfig(host: "127.0.0.1", port: 1),
+            greenmail.CreateConfig(host: "127.0.0.1", port: 1),
             CancellationToken.None);
 
         result.Ok.Should().BeFalse();
@@ -91,7 +87,7 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     public async Task ValidateConfigAsync_SslAgainstSelfSignedGreenmail_ReturnsConnectionFailure()
     {
         var result = await Source().ValidateConfigAsync(
-            _greenmail.CreateConfig(useSsl: true), CancellationToken.None);
+            greenmail.CreateConfig(useSsl: true), CancellationToken.None);
 
         result.Ok.Should().BeFalse(
             "the IMAPS certificate is self-signed and expired, and ImapClientFactory sets no validation callback");
@@ -111,12 +107,12 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Imap_ListNewMessages_ConnectsAndLists()
     {
-        await _greenmail.PurgeMailAsync();
-        await _greenmail.SendAsync("first message", "body one");
-        await _greenmail.SendAsync("second message", "body two");
-        await _greenmail.SendAsync("third message", "body three");
+        await greenmail.PurgeMailAsync();
+        await greenmail.SendAsync("first message", "body one");
+        await greenmail.SendAsync("second message", "body two");
+        await greenmail.SendAsync("third message", "body three");
 
-        var messages = await ListAsync(Source(), _greenmail.CreateConfig());
+        var messages = await ListAsync(Source(), greenmail.CreateConfig());
 
         messages.Should().HaveCount(
             3, "every message delivered to alice@greenmail.test since the purge must be listed");
@@ -130,31 +126,31 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Imap_ListNewMessages_ReturnsUidsInOrder()
     {
-        await _greenmail.PurgeMailAsync();
+        await greenmail.PurgeMailAsync();
         for (var i = 1; i <= 4; i++)
         {
-            await _greenmail.SendAsync($"seed {i}", $"seed body {i}");
+            await greenmail.SendAsync($"seed {i}", $"seed body {i}");
         }
 
-        var messages = await ListAsync(Source(), _greenmail.CreateConfig());
+        var messages = await ListAsync(Source(), greenmail.CreateConfig());
         var uids = UidsOf(messages);
 
         uids.Should().HaveCount(4);
         uids.Should().BeInAscendingOrder("the connector must yield messages in UID order");
         messages.Select(m => m.Headers["subject"]).Should().Equal(
-            new[] { "seed 1", "seed 2", "seed 3", "seed 4" },
+            ["seed 1", "seed 2", "seed 3", "seed 4"],
             "Greenmail hands out UIDs at delivery, so UID order must be delivery order");
     }
 
     [Fact]
     public async Task ListNewMessagesAsync_WithCheckpoint_YieldsOnlyMessagesWithUidGreaterThanCheckpoint()
     {
-        await _greenmail.PurgeMailAsync();
-        await _greenmail.SendAsync("already fetched 1", "one");
-        await _greenmail.SendAsync("already fetched 2", "two");
-        await _greenmail.SendAsync("newer", "three");
+        await greenmail.PurgeMailAsync();
+        await greenmail.SendAsync("already fetched 1", "one");
+        await greenmail.SendAsync("already fetched 2", "two");
+        await greenmail.SendAsync("newer", "three");
 
-        var config = _greenmail.CreateConfig();
+        var config = greenmail.CreateConfig();
         var all = await ListAsync(Source(), config);
         all.Should().HaveCount(3);
 
@@ -166,19 +162,19 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
         var remaining = await ListAsync(Source(), config, checkpoint);
 
         UidsOf(remaining).Should().Equal(
-            new[] { uids[1], uids[2] },
+            [uids[1], uids[2]],
             "messages at or below last_uid must never be re-yielded");
     }
 
     [Fact]
     public async Task ListNewMessagesAsync_DedupeRespectsUidRange_NoMessageYieldedTwice()
     {
-        await _greenmail.PurgeMailAsync();
-        await _greenmail.SendAsync("dedupe 1", "one");
-        await _greenmail.SendAsync("dedupe 2", "two");
-        await _greenmail.SendAsync("dedupe 3", "three");
+        await greenmail.PurgeMailAsync();
+        await greenmail.SendAsync("dedupe 1", "one");
+        await greenmail.SendAsync("dedupe 2", "two");
+        await greenmail.SendAsync("dedupe 3", "three");
 
-        var config = _greenmail.CreateConfig();
+        var config = greenmail.CreateConfig();
         var first = await ListAsync(Source(), config);
         first.Should().HaveCount(3);
 
@@ -201,10 +197,10 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task ListNewMessagesAsync_HeadersContainFromAndSubject()
     {
-        await _greenmail.PurgeMailAsync();
-        await _greenmail.SendAsync("Header subject", "header body");
+        await greenmail.PurgeMailAsync();
+        await greenmail.SendAsync("Header subject", "header body");
 
-        var messages = await ListAsync(Source(), _greenmail.CreateConfig());
+        var messages = await ListAsync(Source(), greenmail.CreateConfig());
         var message = messages.Should().ContainSingle().Which;
 
         message.Headers.Keys.Should()
@@ -223,11 +219,11 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task ListNewMessagesAsync_BodyTextContainsPlainText()
     {
-        await _greenmail.PurgeMailAsync();
+        await greenmail.PurgeMailAsync();
         const string marker = "PLAINTEXT-BODY-MARKER-42";
-        await _greenmail.SendAsync("Body subject", $"line one\n{marker}\nline three");
+        await greenmail.SendAsync("Body subject", $"line one\n{marker}\nline three");
 
-        var messages = await ListAsync(Source(), _greenmail.CreateConfig());
+        var messages = await ListAsync(Source(), greenmail.CreateConfig());
         var message = messages.Should().ContainSingle().Which;
 
         message.BodyText.Should().Contain(
@@ -249,7 +245,7 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     public async Task ListNewMessagesAsync_TransferEncodedBody_RoundTripsExactly(
         ContentEncoding transferEncoding)
     {
-        await _greenmail.PurgeMailAsync();
+        await greenmail.PurgeMailAsync();
 
         var body = transferEncoding switch
         {
@@ -258,10 +254,10 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
             _ => "BASE64 marker plain ascii tail",
         };
 
-        await _greenmail.SendAsync(
+        await greenmail.SendAsync(
             $"Transfer subject {transferEncoding}", body, transferEncoding: transferEncoding);
 
-        var messages = await ListAsync(Source(), _greenmail.CreateConfig());
+        var messages = await ListAsync(Source(), greenmail.CreateConfig());
         var message = messages.Should().ContainSingle().Which;
 
         message.BodyText.TrimEnd('\r', '\n').Should().Be(
@@ -283,8 +279,8 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
         const string attachmentMarker = "ATTACHMENT-MARKER-9f2c-content";
         const string bodyMarker = "BODY-TEXT-MARKER-7d1e";
 
-        await _greenmail.PurgeMailAsync();
-        await _greenmail.SendAsync(
+        await greenmail.PurgeMailAsync();
+        await greenmail.SendAsync(
             "Attachment subject",
             bodyMarker,
             attachmentFileName: "report.txt",
@@ -293,7 +289,7 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
         var log = new MemoryStream();
         var source = new ImapMessageSource(new ProtocolLoggingFactory(log));
 
-        var messages = await ListAsync(source, _greenmail.CreateConfig());
+        var messages = await ListAsync(source, greenmail.CreateConfig());
         var message = messages.Should().ContainSingle().Which;
 
         message.AttachmentsMetadata.Should().ContainSingle(
@@ -326,12 +322,12 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Imap_AdvanceCheckpoint_UpdatesLastUid()
     {
-        await _greenmail.PurgeMailAsync();
-        await _greenmail.SendAsync("checkpoint 1", "one");
-        await _greenmail.SendAsync("checkpoint 2", "two");
-        await _greenmail.SendAsync("checkpoint 3", "three");
+        await greenmail.PurgeMailAsync();
+        await greenmail.SendAsync("checkpoint 1", "one");
+        await greenmail.SendAsync("checkpoint 2", "two");
+        await greenmail.SendAsync("checkpoint 3", "three");
 
-        var config = _greenmail.CreateConfig();
+        var config = greenmail.CreateConfig();
         var messages = await ListAsync(Source(), config);
         messages.Should().HaveCount(3);
 
@@ -360,7 +356,7 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
         JsonElement config,
         SourceCheckpoint? checkpoint = null)
     {
-        var messages = new List<RemoteMessage>();
+        List<RemoteMessage> messages = [];
         await foreach (var message in source.ListNewMessagesAsync(
             config, checkpoint ?? SourceCheckpoint.Empty, CancellationToken.None))
         {
@@ -372,20 +368,17 @@ public sealed class ImapMessageSourceTests : IClassFixture<GreenMailFixture>
 
     /// <summary>Parses the string UIDs into numbers so ordering can be asserted numerically.</summary>
     private static uint[] UidsOf(IEnumerable<RemoteMessage> messages) =>
-        messages
+    [
+        .. messages
             .Select(m => uint.Parse(m.RemoteUid, CultureInfo.InvariantCulture))
-            .ToArray();
+    ];
 
     /// <summary>
     /// Yields a client whose IMAP conversation is written to <paramref name="log"/> —
     /// the integration-suite stand-in for the unmockable <c>ImapClient</c>.
     /// </summary>
-    private sealed class ProtocolLoggingFactory : IImapClientFactory
+    private sealed class ProtocolLoggingFactory(Stream log) : IImapClientFactory
     {
-        private readonly Stream _log;
-
-        public ProtocolLoggingFactory(Stream log) => _log = log;
-
-        public ImapClient Create() => new(new ProtocolLogger(_log, leaveOpen: true));
+        public ImapClient Create() => new(new ProtocolLogger(log, leaveOpen: true));
     }
 }

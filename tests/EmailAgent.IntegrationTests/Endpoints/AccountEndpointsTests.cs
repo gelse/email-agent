@@ -337,16 +337,12 @@ internal static class AccountTestHost
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class LoginEndpointTests
+public class LoginEndpointTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public LoginEndpointTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task Login_HappyPath_ReturnsTokenAndSetsCookie_WithMustCompleteFirstLoginFalse()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -376,7 +372,7 @@ public class LoginEndpointTests
     [Fact]
     public async Task Login_FirstLogin_ReturnsMustCompleteFirstLoginTrue_AndXLoginStateHeader()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -403,7 +399,7 @@ public class LoginEndpointTests
     [Fact]
     public async Task Login_WrongPassword_Returns401_AndWritesAudit()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -445,7 +441,7 @@ public class LoginEndpointTests
     [Fact]
     public async Task Login_FivePerMinute_PerIP_Sixth_Returns429_WithRetryAfter_ButNoXRateLimitHeaders()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -474,7 +470,7 @@ public class LoginEndpointTests
     [Fact]
     public async Task Login_FivePerMinute_PerAccount_Sixth_Returns429_WithRetryAfter()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -505,16 +501,12 @@ public class LoginEndpointTests
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class OtpLoginEndpointTests
+public class OtpLoginEndpointTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public OtpLoginEndpointTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task OtpLogin_HappyPath_ReturnsToken_AndMarksUserActive_AndForcesPasswordChange()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -546,7 +538,7 @@ public class OtpLoginEndpointTests
     [Fact]
     public async Task OtpLogin_ExpiredOtp_Returns401()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -567,7 +559,7 @@ public class OtpLoginEndpointTests
     [Fact]
     public async Task OtpLogin_ReusedOtp_Returns401_OnSecondUse()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -588,7 +580,7 @@ public class OtpLoginEndpointTests
         // Milestone exit-criteria test (adapted to the task file's flow):
         // OTP login → first-login change-password → password_hash updated and
         // must_change_password flips to false, JWT + refresh cookie in hand.
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -633,12 +625,8 @@ public class OtpLoginEndpointTests
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class SetPassphraseEndpointTests
+public class SetPassphraseEndpointTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public SetPassphraseEndpointTests(PostgresFixture postgres) => _postgres = postgres;
-
     private async Task<(Guid UserId, string Bearer)> SignInAsync(
         WebApplicationFactory<Program> factory,
         HttpClient client,
@@ -652,7 +640,7 @@ public class SetPassphraseEndpointTests
     [Fact]
     public async Task SetPassphrase_HappyPath_PersistsDekWrapped_AndNonce_AndSalt()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -703,7 +691,7 @@ public class SetPassphraseEndpointTests
     [Fact]
     public async Task SetPassphrase_AlreadySet_Returns409_ProblemDetails()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -732,7 +720,7 @@ public class SetPassphraseEndpointTests
     [Fact]
     public async Task SetPassphrase_MismatchedConfirmation_Returns400_WithErrors()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -759,7 +747,7 @@ public class SetPassphraseEndpointTests
     [Fact]
     public async Task SetPassphrase_TooShort_Returns400_WithErrors()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -783,7 +771,7 @@ public class SetPassphraseEndpointTests
     [Fact]
     public async Task SetPassphrase_ConcurrentCallsForSameUser_OneSucceeds_OtherReturns429()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -818,16 +806,12 @@ public class SetPassphraseEndpointTests
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class ChangePasswordEndpointTests
+public class ChangePasswordEndpointTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public ChangePasswordEndpointTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task ChangePassword_FirstLogin_OnlyNewPassword_UpdatesHash_AndFlipsMustChangePassword()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -864,7 +848,7 @@ public class ChangePasswordEndpointTests
     [Fact]
     public async Task ChangePassword_Subsequent_RequiresOldPassword_AndUpdatesHash()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -913,7 +897,7 @@ public class ChangePasswordEndpointTests
     [Fact]
     public async Task ChangePassword_WrongOldPassword_Returns400_WithErrors()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -947,7 +931,7 @@ public class ChangePasswordEndpointTests
     [Fact]
     public async Task ChangePassword_WithoutToken_Returns401_RFC7807()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -965,16 +949,12 @@ public class ChangePasswordEndpointTests
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class RefreshEndpointTests
+public class RefreshEndpointTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public RefreshEndpointTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task Refresh_HappyPath_RotatesCookie_AndReturnsNewToken()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1010,7 +990,7 @@ public class RefreshEndpointTests
     [Fact]
     public async Task Refresh_ReuseOfRotatedToken_Returns401_AndEmitsAudit_AndInvalidatesFamily()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1051,7 +1031,7 @@ public class RefreshEndpointTests
     [Fact]
     public async Task Refresh_BadOrigin_Returns403()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1071,7 +1051,7 @@ public class RefreshEndpointTests
         // not swallow the store's evidence path — replaying a consumed token
         // for a Disabled account still revokes the family and writes
         // refresh_reuse_detected (401), it just never mints a successor.
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1117,16 +1097,12 @@ public class RefreshEndpointTests
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class LogoutEndpointTests
+public class LogoutEndpointTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public LogoutEndpointTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task Logout_RevokesToken_AndClearsCookie()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1173,16 +1149,12 @@ public class LogoutEndpointTests
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class AccountCrossCuttingTests
+public class AccountCrossCuttingTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public AccountCrossCuttingTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task Authenticated_Endpoint_EmitsXRateLimitHeaders_OnEveryResponse()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1225,7 +1197,7 @@ public class AccountCrossCuttingTests
         // Milestone exit criterion: act out login → otp-login →
         // change-password → set-passphrase → logout and require one row per
         // event with non-null actor_user_id, ip and hmac.
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1263,14 +1235,13 @@ public class AccountCrossCuttingTests
 
         var rows = await AccountTestHost.AuditRowsAsync(factory, userId);
         var actions = rows.Select(r => r.Action).ToList();
-        actions.Should().Contain(new[]
-        {
+        actions.Should().Contain([
             AuditActions.LoginSuccess,
             AuditActions.OtpLoginSuccess,
             AuditActions.ChangePassword,
             AuditActions.SetPassphrase,
-            AuditActions.Logout,
-        });
+            AuditActions.Logout
+        ]);
 
         rows.Where(r => actions.Contains(r.Action)).Should().OnlyContain(r =>
             r.ActorUserId == userId
@@ -1288,7 +1259,7 @@ public class AccountCrossCuttingTests
     [Fact]
     public async Task UnhandledException_Returns500_RFC7807()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1305,7 +1276,7 @@ public class AccountCrossCuttingTests
     {
         // AC: even a framework-level parse failure surfaces as a §13.12
         // document (the endpoints read the body manually for this reason).
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1332,7 +1303,7 @@ public class AccountCrossCuttingTests
         // AC: unmatched routes are problem documents too — a dotted path is
         // used deliberately, since MapFallback's {*path:nonfile} pattern
         // would leave it an empty-bodied 404.
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1348,7 +1319,7 @@ public class AccountCrossCuttingTests
     {
         // Review finding 2: a non-form body on the login endpoint is a client
         // error (400 problem), never a 500 from ReadFormAsync.
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1368,7 +1339,7 @@ public class AccountCrossCuttingTests
         // login (after credential verification, so no status oracle), a live
         // refresh token (without rotating it), and a still-valid JWT on the
         // first-login bootstrap endpoints.
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 
@@ -1418,7 +1389,7 @@ public class AccountCrossCuttingTests
             var issuer = scope.ServiceProvider.GetRequiredService<IJwtTokenIssuer>();
             var db = scope.ServiceProvider.GetRequiredService<EmailAgentDbContext>();
             var user = await db.Users.AsNoTracking().FirstAsync(u => u.Id == userId);
-            bearer = issuer.IssueAccessToken(user, Array.Empty<string>());
+            bearer = issuer.IssueAccessToken(user, []);
         }
 
         var setPassphrase = await AccountTestHost.PostJsonAsync(

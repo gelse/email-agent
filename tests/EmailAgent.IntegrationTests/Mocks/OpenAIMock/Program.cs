@@ -281,7 +281,7 @@ public class Program
 /// </summary>
 public sealed class MockState
 {
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private readonly ConcurrentDictionary<string, int> _requestCounts = new(StringComparer.Ordinal);
     private string _activeScenario;
     private string? _lastRequestBody;

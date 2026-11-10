@@ -20,22 +20,16 @@ public interface IJwtTokenIssuer
 }
 
 /// <summary>Default <see cref="IJwtTokenIssuer"/> (M1T4 task step 5).</summary>
-public sealed class JwtTokenIssuer : IJwtTokenIssuer
+public sealed class JwtTokenIssuer(IOptions<AuthOptions> options) : IJwtTokenIssuer
 {
-    private readonly AuthOptions _options;
-
-    public JwtTokenIssuer(IOptions<AuthOptions> options)
-    {
-        _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
-    }
 
     public string IssueAccessToken(User user, IEnumerable<string> roles)
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(roles);
 
-        if (string.IsNullOrWhiteSpace(_options.SigningKey)
-            || Encoding.UTF8.GetByteCount(_options.SigningKey) < 32)
+        if (string.IsNullOrWhiteSpace(options.Value.SigningKey)
+            || Encoding.UTF8.GetByteCount(options.Value.SigningKey) < 32)
         {
             throw new InvalidOperationException(
                 "Auth:SigningKey (env AUTH__SigningKey) must be present and at least 32 bytes (§16).");
@@ -54,15 +48,15 @@ public sealed class JwtTokenIssuer : IJwtTokenIssuer
             claims.Add(new Claim("role", role));
         }
 
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey));
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(options.Value.SigningKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
         var token = new JwtSecurityToken(
-            issuer: _options.Issuer,
-            audience: _options.Audience,
+            issuer: options.Value.Issuer,
+            audience: options.Value.Audience,
             claims: claims,
             notBefore: now.UtcDateTime,
-            expires: (now + _options.AccessTokenTtl).UtcDateTime,
+            expires: (now + options.Value.AccessTokenTtl).UtcDateTime,
             signingCredentials: credentials);
 
         return new JwtSecurityTokenHandler().WriteToken(token);

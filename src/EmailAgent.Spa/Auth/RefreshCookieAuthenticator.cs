@@ -19,13 +19,11 @@ namespace EmailAgent.Spa.Auth;
 /// private gate — the WASM dispatcher is single-threaded, but the startup
 /// refresh and the bearer retry can still interleave on async continuations.
 /// </remarks>
-public sealed class RefreshCookieAuthenticator
+public sealed class RefreshCookieAuthenticator(IHttpClientFactory clientFactory, TokenStore tokenStore)
 {
     /// <summary>The cookie-only client name registered in Program.cs.</summary>
     public const string ClientName = "RefreshClient";
 
-    private readonly IHttpClientFactory _clientFactory;
-    private readonly TokenStore _tokenStore;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
@@ -36,11 +34,7 @@ public sealed class RefreshCookieAuthenticator
     /// </summary>
     private readonly JwtRoleParser _claims = new();
 
-    public RefreshCookieAuthenticator(IHttpClientFactory clientFactory, TokenStore tokenStore)
-    {
-        _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
-        _tokenStore = tokenStore ?? throw new ArgumentNullException(nameof(tokenStore));
-    }
+
 
     /// <summary>
     /// Attempts one silent refresh. Returns <c>true</c> when a new access
@@ -52,7 +46,7 @@ public sealed class RefreshCookieAuthenticator
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var client = _clientFactory.CreateClient(ClientName);
+            var client = clientFactory.CreateClient(ClientName);
             using var response = await client
                 .PostAsync("/v1/account/refresh", new ByteArrayContent(Array.Empty<byte>()), ct)
                 .ConfigureAwait(false);
@@ -84,7 +78,7 @@ public sealed class RefreshCookieAuthenticator
             // treated as "not provably the same principal". A false drop costs
             // one passphrase re-prompt; a false keep risks a source wrapped
             // under a foreign key.
-            var previous = _tokenStore.AccessToken;
+            var previous = tokenStore.AccessToken;
             var previousSubject = previous is null ? null : _claims.GetSubject(previous);
             var nextSubject = _claims.GetSubject(body.AccessToken);
             var samePrincipal = previous is null
@@ -94,11 +88,11 @@ public sealed class RefreshCookieAuthenticator
 
             if (samePrincipal)
             {
-                _tokenStore.Set(body.AccessToken);
+                tokenStore.Set(body.AccessToken);
             }
             else
             {
-                _tokenStore.SignIn(body.AccessToken);
+                tokenStore.SignIn(body.AccessToken);
             }
 
             return true;

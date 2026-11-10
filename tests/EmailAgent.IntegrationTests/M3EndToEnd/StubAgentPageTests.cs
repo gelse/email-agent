@@ -31,7 +31,7 @@ namespace EmailAgent.IntegrationTests.M3EndToEnd;
 
 [Trait("Category", "M3EndToEnd")]
 [Collection(M3E2ECollection.Name)]
-public sealed class StubAgentPageTests : IAsyncLifetime
+public sealed class StubAgentPageTests(PostgresFixture postgres) : IAsyncLifetime
 {
     /// <summary>Argon2-free reads still run over a container — keep headroom.</summary>
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
@@ -39,10 +39,7 @@ public sealed class StubAgentPageTests : IAsyncLifetime
     /// <summary>Same-origin dev origin (nginx serves SPA + API — §13.9).</summary>
     private static readonly Uri BaseAddress = new("http://localhost:8081/");
 
-    private readonly PostgresFixture _postgres;
-    private readonly List<string> _markers = new();
-
-    public StubAgentPageTests(PostgresFixture postgres) => _postgres = postgres;
+    private readonly List<string> _markers = [];
 
     /// <summary>
     /// The M3 exit-criterion fact: an ordinary <c>User</c> reaches the stub,
@@ -56,7 +53,7 @@ public sealed class StubAgentPageTests : IAsyncLifetime
     {
         var marker = M3TestHarness.NewMarker();
         _markers.Add(marker);
-        var host = await M3TestHarness.CreateHostAsync(_postgres, marker);
+        var host = await M3TestHarness.CreateHostAsync(postgres, marker);
         await using var factory = host.Factory;
 
         var passingId = await M3TestHarness.SeedRowAsync(
@@ -72,10 +69,8 @@ public sealed class StubAgentPageTests : IAsyncLifetime
             factory, $"{marker}-user@example.test", UserRole.User);
         var bearer = await AdminTestHost.BearerAsync(factory, userId, "User");
 
-        using var recorder = new RecordingHandler
-        {
-            InnerHandler = factory.Server.CreateHandler(),
-        };
+        using var recorder = new RecordingHandler();
+        recorder.InnerHandler = factory.Server.CreateHandler();
         using var flow = BuildFlow(factory, recorder, bearer);
         flow.Nav.NavigateTo("/user/agents/new");
 
@@ -141,7 +136,7 @@ public sealed class StubAgentPageTests : IAsyncLifetime
     {
         foreach (var marker in _markers)
         {
-            await M3TestHarness.CleanupAsync(_postgres, marker);
+            await M3TestHarness.CleanupAsync(postgres, marker);
         }
     }
 
@@ -223,7 +218,7 @@ public sealed class StubAgentPageTests : IAsyncLifetime
             HttpStatusCode Status,
             string? Authorization);
 
-        private readonly List<RecordedCall> _calls = new();
+        private readonly List<RecordedCall> _calls = [];
 
         public IReadOnlyList<RecordedCall> Calls
         {
@@ -231,7 +226,7 @@ public sealed class StubAgentPageTests : IAsyncLifetime
             {
                 lock (_calls)
                 {
-                    return _calls.ToArray();
+                    return [.. _calls];
                 }
             }
         }

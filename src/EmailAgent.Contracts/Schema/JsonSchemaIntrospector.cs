@@ -31,7 +31,7 @@ public static class JsonSchemaIntrospector
         // Root.Source is the schema's own JSON — the same text FromText parsed
         // or the builder produced — so both creation paths introspect alike.
         var root = schema.Root.Source;
-        var fields = new List<SchemaField>();
+        List<SchemaField> fields = [];
         if (root.ValueKind == JsonValueKind.Object)
             CollectFields(root, prefix: null, fields);
         return fields;

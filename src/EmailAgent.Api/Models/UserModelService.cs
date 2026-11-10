@@ -19,12 +19,8 @@ namespace EmailAgent.Api.Models;
 /// <see cref="ModelService"/> so it shares the request's
 /// <see cref="EmailAgentDbContext"/>.
 /// </remarks>
-internal sealed class UserModelService
+internal sealed class UserModelService(EmailAgentDbContext db)
 {
-    private readonly EmailAgentDbContext _db;
-
-    public UserModelService(EmailAgentDbContext db)
-        => _db = db ?? throw new ArgumentNullException(nameof(db));
 
     /// <summary>
     /// One capped page of pickable models ordered <c>(created_at, id)</c> so
@@ -52,7 +48,7 @@ internal sealed class UserModelService
         // more rows are pickable than one page holds, Take therefore keeps the
         // OLDEST N and drops the newer ones — a deliberate M3 truncation, to be
         // replaced by cursor paging when M3 pagination arrives.
-        var rows = await _db.ModelCatalog
+        var rows = await db.ModelCatalog
             .AsNoTracking()
             .Where(model => model.Enabled
                          && model.ToolCallingProbeResult == ToolCallingProbeResult.Pass)

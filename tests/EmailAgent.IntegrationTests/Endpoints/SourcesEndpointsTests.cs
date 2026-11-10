@@ -22,14 +22,10 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class SourcesEndpointsTests
+public class SourcesEndpointsTests(PostgresFixture postgres)
 {
     /// <summary>The passphrase the unwrap-dek suite's REAL key material is wrapped under.</summary>
     private const string UnwrapPassphrase = "m2t6-unwr4p-passphr4se";
-
-    private readonly PostgresFixture _postgres;
-
-    public SourcesEndpointsTests(PostgresFixture postgres) => _postgres = postgres;
 
     // -----------------------------------------------------------------------
     // POST — milestone rows
@@ -43,7 +39,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Post_CreatesRow_AndEncryptedBlob_AndReturnsSourceWithoutPassword()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -115,7 +111,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Post_TwoSources_ForSameUser_BothPersist()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -143,7 +139,7 @@ public class SourcesEndpointsTests
         var page = await AccountTestHost.ReadJsonAsync(listResponse);
         var ids = page.GetProperty("items").EnumerateArray()
             .Select(item => item.GetProperty("id").GetGuid()).ToList();
-        ids.Should().Contain(new[] { firstId, secondId });
+        ids.Should().Contain([firstId, secondId]);
 
         var audits = await AccountTestHost.AuditRowsAsync(factory, host.UserId);
         audits.Count(a => a.Action == AuditActions.CreateSource).Should().Be(2);
@@ -156,7 +152,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Post_InvalidConfig_Returns400_ProblemDetails()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -185,7 +181,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Post_UnknownTypeId_Returns400_PluginNotRegistered()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -210,7 +206,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Post_MissingOrMalformedDek_Returns400_NamedXUserDek()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -250,7 +246,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Post_InvalidBodyShapes_Return400_Validation()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -279,7 +275,7 @@ public class SourcesEndpointsTests
         shapeProblem.GetProperty("type").GetString().Should().Be("/errors/validation");
         shapeProblem.GetProperty("errors").EnumerateArray()
             .Select(e => e.GetProperty("name").GetString())
-            .Should().Contain(new[] { "type_id", "display_name" });
+            .Should().Contain(["type_id", "display_name"]);
 
         // Malformed JSON never reaches the framework binder as a 400 with a
         // different shape — it is a §13.12 validation document too.
@@ -304,7 +300,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Get_UnknownId_Returns404_SourceNotFound()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -323,7 +319,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_CrossUser_Requests_Return404_Never403()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -361,7 +357,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Get_WrongDek_Returns400_DekInvalid()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -383,7 +379,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_List_ReturnsOnlyCallersSources_AndRateLimitHeaders()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -417,7 +413,7 @@ public class SourcesEndpointsTests
         var page = await AccountTestHost.ReadJsonAsync(response);
         page.GetProperty("items").EnumerateArray()
             .Select(item => item.GetProperty("id").GetGuid())
-            .Should().BeEquivalentTo(new[] { mine1, mine2 },
+            .Should().BeEquivalentTo([mine1, mine2],
                 "the caller sees only their own rows — never the other account's");
         otherId.Should().NotBeEmpty();
     }
@@ -429,18 +425,18 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_List_PagesAreDisjoint_AndNextCursorOmittedOnLastPage()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
-        var all = new List<Guid>();
+        List<Guid> all = [];
         for (var i = 0; i < 5; i++)
         {
             all.Add(SourcesTestHost.IdOf(
                 await SourcesTestHost.CreateSourceAsync(host, $"paged source {i}")));
         }
 
-        var seen = new List<Guid>();
+        List<Guid> seen = [];
         string? cursor = null;
         var pages = 0;
 
@@ -493,7 +489,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_List_InvalidCursorLimitStatus_Return400_NamedField()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -518,7 +514,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_List_Filters_ByTypeIdAndStatus()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -567,7 +563,7 @@ public class SourcesEndpointsTests
             HttpMethod.Get, "/v1/user/sources?status=Paused", host.Bearer, dek: host.Dek)))
         {
             (await IdsAsync(pausedOnly)).Should().Equal(
-                new Guid[] { paused }, "the paused filter selects exactly the paused row");
+                [paused], "the paused filter selects exactly the paused row");
         }
     }
 
@@ -578,7 +574,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Patch_UpdatesDisplayNameAndInterval_AndAudits()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -607,7 +603,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Patch_PasswordAbsent_KeepsStoredPassword()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -634,7 +630,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Patch_PasswordEmptyString_KeepsStoredPassword()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -660,7 +656,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Patch_PasswordNewValue_ReplacesStoredPassword()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -694,7 +690,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Patch_IntervalOutOfRange_Returns400_Validation()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -716,7 +712,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Patch_UnknownId_Returns404()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -735,7 +731,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Delete_OwnEmptySource_Returns204_RemovesRowAndBlob()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -767,7 +763,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Delete_SourceWithProcessedMessages_Returns409_AndRetainsRows()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -799,7 +795,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Sources_Anonymous_Get_Returns401_AndAdminRoleToken_Returns403()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -821,7 +817,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Kdf_Get_WithPassphraseMaterial_ReturnsSaltAndParams_WithoutWrappedKey()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -846,7 +842,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task Kdf_Get_WithoutPassphrase_Returns409_PassphraseNotSet()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -870,7 +866,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_CorrectPassphrase_ReturnsPlaintextDek_WithoutEchoingPassphrase()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -908,7 +904,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_WrongPassphrase_Returns401_CredentialMismatch_AndAuditsFailure()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -943,7 +939,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_NoKeyMaterial_Returns409_BeforeReadingBody()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -969,7 +965,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_MissingOrEmptyPassphrase_Returns400_NamedPassphrase()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -1000,7 +996,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_MalformedBody_Returns400_NotValidJson()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -1023,7 +1019,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_OversizedBody_Returns400_NamedPassphrase()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -1046,7 +1042,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_DisabledAccount_Returns403_BeforeSentinel()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -1065,7 +1061,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_Anonymous_Returns401_RFC7807()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -1088,7 +1084,7 @@ public class SourcesEndpointsTests
     [Fact]
     public async Task UnwrapDek_ConcurrentDerivation_Returns429_WithRetryAfter()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -1146,8 +1142,10 @@ public class SourcesEndpointsTests
     {
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var page = await AccountTestHost.ReadJsonAsync(response);
-        return page.GetProperty("items").EnumerateArray()
-            .Select(item => item.GetProperty("id").GetGuid())
-            .ToList();
+        return
+        [
+            .. page.GetProperty("items").EnumerateArray()
+                .Select(item => item.GetProperty("id").GetGuid())
+        ];
     }
 }

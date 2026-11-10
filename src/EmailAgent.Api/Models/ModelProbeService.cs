@@ -36,7 +36,13 @@ namespace EmailAgent.Api.Models;
 /// tests can substitute a canned-event fake.
 /// </para>
 /// </remarks>
-internal sealed class ModelProbeService : IModelProbeService
+internal sealed class ModelProbeService(
+        EmailAgentDbContext db,
+        IAuditLogger audit,
+        IOptions<ModelOptions> options,
+        TimeProvider clock,
+        Func<IAgentEngine> engineFactory)
+    : IModelProbeService
 {
     /// <summary>The plugin/engine id whose instance the factory resolves (M3T1's DEFAULT engine).</summary>
     public const string OpenAiCompatibleEngineTypeId = "openai-compatible";
@@ -62,46 +68,20 @@ internal sealed class ModelProbeService : IModelProbeService
         Stream: false,
         MaxTokens: ProbeRequestBuilder.ProbeMaxTokens);
 
-    private readonly EmailAgentDbContext _db;
-    private readonly IAuditLogger _audit;
-    private readonly IOptions<ModelOptions> _options;
-    private readonly TimeProvider _clock;
-    private readonly Func<IAgentEngine> _engineFactory;
-
-    /// <summary>Creates the probe service.</summary>
-    /// <param name="db">The request-scoped EF context sharing M3T3's catalog table (M1T2).</param>
-    /// <param name="audit">Audit sink; consulted only on <see cref="ProbeOutcome.Fail"/>.</param>
-    /// <param name="options"><c>Model</c> section options (the re-probe window, SQ-M3-3).</param>
-    /// <param name="clock">UTC clock (registered as <see cref="TimeProvider.System"/>); seam for cache-window tests.</param>
-    /// <param name="engineFactory">Resolves the <c>openai-compatible</c> <see cref="IAgentEngine"/> per probe call.</param>
-    public ModelProbeService(
-        EmailAgentDbContext db,
-        IAuditLogger audit,
-        IOptions<ModelOptions> options,
-        TimeProvider clock,
-        Func<IAgentEngine> engineFactory)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _audit = audit ?? throw new ArgumentNullException(nameof(audit));
-        _options = options ?? throw new ArgumentNullException(nameof(options));
-        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-        _engineFactory = engineFactory ?? throw new ArgumentNullException(nameof(engineFactory));
-    }
-
     /// <inheritdoc />
     public async Task<ProbeResult> ProbeAsync(
         OpenAICompatibleConfig config, Guid? correlationModelId, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(config);
 
-        var now = _clock.GetUtcNow();
-        var window = _options.Value.ProbeReprobeWindow;
+        var now = clock.GetUtcNow();
+        var window = options.Value.ProbeReprobeWindow;
 
         // Cache key is exactly (base_url, model_name) + Pass + within window:
         // an api_key rotation does not change tool-calling capability, and
         // correlationModelId is audit-only — neither participates in the key
         // (task Risks). A stored Fail is never cache-eligible (SQ-M3-3).
-        var cachedRow = await _db.ModelCatalog
+        var cachedRow = await db.ModelCatalog
             .AsNoTracking()
             .Where(m => m.BaseUrl == config.BaseUrl
                      && m.ModelName == config.ModelName
@@ -138,9 +118,9 @@ internal sealed class ModelProbeService : IModelProbeService
         // is a JsonElement tied to its JsonDocument (the AgentEvent lifetime
         // contract), so the raw text is read while the event is still live
         // instead of relying on the engine having cloned the element.
-        var toolCalls = new List<(string Name, string ArgumentsJson)>();
-        var responseTextChunks = new List<string>();
-        var engine = _engineFactory(); // IAgentEngine is not IAsyncDisposable — plain local.
+        List<(string Name, string ArgumentsJson)> toolCalls = [];
+        List<string> responseTextChunks = [];
+        var engine = engineFactory(); // IAgentEngine is not IAsyncDisposable — plain local.
 
         // The canonical probe call (SQ-M3-3) goes through the concrete engine's
         // options-carrying overload so the transmitted body carries
@@ -251,7 +231,7 @@ internal sealed class ModelProbeService : IModelProbeService
                 duration_ms = durationMs,
             });
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
                 new AuditEvent(
                     ActorUserId: null,
                     ActorRole: null,

@@ -111,14 +111,9 @@ public sealed class ModelsApiException : Exception
 /// failures surface as <see cref="HttpRequestException"/> for the caller's
 /// "could not reach the API" message.
 /// </summary>
-public sealed class ModelsClient
+public sealed class ModelsClient(HttpClient api)
 {
-    private readonly HttpClient _api;
 
-    public ModelsClient(HttpClient api)
-    {
-        _api = api ?? throw new ArgumentNullException(nameof(api));
-    }
 
     /// <summary>
     /// <c>GET /v1/admin/models</c> — one keyset page (§13.13) with the three
@@ -156,7 +151,7 @@ public sealed class ModelsClient
             parts.Add(Query("filter[display_name_contains]", displayNameContains));
         }
 
-        using var response = await _api.GetAsync(
+        using var response = await api.GetAsync(
             "/v1/admin/models?" + string.Join("&", parts)).ConfigureAwait(false);
         return await ReadAsync<ModelListResponse>(response).ConfigureAwait(false);
     }
@@ -168,7 +163,7 @@ public sealed class ModelsClient
     /// <summary><c>GET /v1/admin/models/{id}</c> — edit-mode pre-fill (never carries a key).</summary>
     public async Task<ModelDto> GetAsync(Guid id)
     {
-        using var response = await _api.GetAsync($"/v1/admin/models/{id}").ConfigureAwait(false);
+        using var response = await api.GetAsync($"/v1/admin/models/{id}").ConfigureAwait(false);
         return await ReadAsync<ModelDto>(response).ConfigureAwait(false);
     }
 
@@ -176,7 +171,7 @@ public sealed class ModelsClient
     public async Task<ModelDto> CreateAsync(CreateModelRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var response = await _api.PostAsJsonAsync("/v1/admin/models", request)
+        using var response = await api.PostAsJsonAsync("/v1/admin/models", request)
             .ConfigureAwait(false);
         return await ReadAsync<ModelDto>(response).ConfigureAwait(false);
     }
@@ -193,7 +188,7 @@ public sealed class ModelsClient
     public async Task<ModelDto> UpdateAsync(Guid id, UpdateModelRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var response = await _api.PatchAsJsonAsync($"/v1/admin/models/{id}", request)
+        using var response = await api.PatchAsJsonAsync($"/v1/admin/models/{id}", request)
             .ConfigureAwait(false);
         return await ReadAsync<ModelDto>(response).ConfigureAwait(false);
     }
@@ -201,7 +196,7 @@ public sealed class ModelsClient
     /// <summary><c>DELETE /v1/admin/models/{id}</c> → 204.</summary>
     public async Task DeleteAsync(Guid id)
     {
-        using var response = await _api.DeleteAsync($"/v1/admin/models/{id}").ConfigureAwait(false);
+        using var response = await api.DeleteAsync($"/v1/admin/models/{id}").ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw await ModelsApiException.CreateAsync(response).ConfigureAwait(false);
@@ -218,7 +213,7 @@ public sealed class ModelsClient
         Guid id, TestCompletionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var response = await _api.PostAsJsonAsync(
+        using var response = await api.PostAsJsonAsync(
             $"/v1/admin/models/{id}/test-completion", request).ConfigureAwait(false);
         return await ReadAsync<TestCompletionResponse>(response).ConfigureAwait(false);
     }

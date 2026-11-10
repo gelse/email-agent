@@ -26,12 +26,9 @@ namespace EmailAgent.Spa.Models;
 /// (<c>enabled = true AND tool_calling_probe_result = Pass</c>): the SPA
 /// renders what comes back and never filters for itself (task invariant).
 /// </summary>
-public sealed class UserModelsClient
+public sealed class UserModelsClient(HttpClient api)
 {
-    private readonly HttpClient _api;
 
-    public UserModelsClient(HttpClient api)
-        => _api = api ?? throw new ArgumentNullException(nameof(api));
 
     /// <summary>
     /// Loads the allow-listed models.
@@ -41,7 +38,7 @@ public sealed class UserModelsClient
     /// <exception cref="ModelsApiException">The API answered a non-success status.</exception>
     public async Task<IReadOnlyList<UserModelDto>> ListAsync(int limit = 100)
     {
-        using var response = await _api.GetAsync(
+        using var response = await api.GetAsync(
             "/v1/user/models?limit=" + Uri.EscapeDataString(limit.ToString()))
             .ConfigureAwait(false);
 
@@ -53,7 +50,7 @@ public sealed class UserModelsClient
         var body = await response.Content
             .ReadFromJsonAsync<UserModelListResponse>()
             .ConfigureAwait(false);
-        return body?.Items ?? new List<UserModelDto>();
+        return body?.Items ?? [];
     }
 }
 

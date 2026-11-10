@@ -42,7 +42,8 @@ namespace EmailAgent.IntegrationTests.Spa;
 
 [Trait("Category", "M3T5")]
 [Collection("Postgres")]
-public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
+public class AdminModelsFlowIntegrationTests(OpenAIMockFixture fixture, PostgresFixture postgres)
+    : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
 {
     /// <summary>Throwaway integration-test api_key (never a real credential).</summary>
     private const string ApiKey = "sk-test-redacted-m3t5";
@@ -61,15 +62,7 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
     /// <summary>Same-origin dev origin (nginx serves SPA + API — §13.9).</summary>
     private static readonly Uri BaseAddress = new("http://localhost:8081/");
 
-    private readonly OpenAIMockFixture _fixture;
-    private readonly PostgresFixture _postgres;
     private string? _marker;
-
-    public AdminModelsFlowIntegrationTests(OpenAIMockFixture fixture, PostgresFixture postgres)
-    {
-        _fixture = fixture;
-        _postgres = postgres;
-    }
 
     // -----------------------------------------------------------------------
     // Task step 9: add -> probe-pass -> test completion -> delete.
@@ -110,7 +103,7 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
             () => page.Find("#model-display-name").Should().NotBeNull(
                 "the add dialog renders its form as soon as it is opened"), Wait);
         page.Find("#model-display-name").Change(DisplayName);
-        page.Find("#model-base-url").Change(_fixture.BaseUrl);
+        page.Find("#model-base-url").Change(fixture.BaseUrl);
         page.Find("#model-model-name").Change(host.Marker);
         page.Find("#model-api-key").Change(ApiKey);
         page.Find("#model-price-input").Change("0.02");
@@ -145,14 +138,14 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
         create.Body.Should().Contain($"\"api_key\":\"{ApiKey}\"",
             "the create carries the key the form collected (stored as a wrapped blob)");
         create.Body.Should().Contain($"\"model_name\":\"{host.Marker}\"")
-            .And.Contain($"\"base_url\":\"{_fixture.BaseUrl}\"")
+            .And.Contain($"\"base_url\":\"{fixture.BaseUrl}\"")
             .And.Contain("\"provider\":\"openai-compatible\"",
                 "provider is written by the read-only field (SQ-M3-14)");
         page.Markup.Should().NotContain(ApiKey,
             "the ModelDto projection never echoes a credential into the DOM");
 
         // ---- test completion against the happy scenario ----
-        await _fixture.SetScenarioAsync("happy");
+        await fixture.SetScenarioAsync("happy");
         page.Find($"#model-test-{modelId:N}").Click();
         page.WaitForAssertion(
             () => page.Find("#test-user-prompt").Should().NotBeNull(), Wait);
@@ -203,12 +196,11 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
         modelsCalls.Should().OnlyContain(
             call => call.Authorization == $"Bearer {host.Bearer}",
             "BearerTokenHandler stamps the JWT on every catalog call");
-        modelsCalls.Select(call => call.Path.Split('?')[0]).Should().Contain(new[]
-        {
+        modelsCalls.Select(call => call.Path.Split('?')[0]).Should().Contain([
             "/v1/admin/models",
             $"/v1/admin/models/{modelId}/test-completion",
-            $"/v1/admin/models/{modelId}",
-        });
+            $"/v1/admin/models/{modelId}"
+        ]);
     }
 
     // -----------------------------------------------------------------------
@@ -233,10 +225,10 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
             return;
         }
 
-        await AccountTestHost.MigrateAsync(_postgres);
+        await AccountTestHost.MigrateAsync(postgres);
         await using var db = new EmailAgentDbContext(
             new DbContextOptionsBuilder<EmailAgentDbContext>()
-                .UseNpgsql(_postgres.ConnectionString)
+                .UseNpgsql(postgres.ConnectionString)
                 .Options);
 
         var rows = await db.ModelCatalog.AsNoTracking()
@@ -293,9 +285,9 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
         _marker = marker;
 
         // Deterministic mock state before any probe can run.
-        await _fixture.SetScenarioAsync(scenario);
+        await fixture.SetScenarioAsync(scenario);
 
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var factory = ApiTestFactory.Create(connectionString);
 
         // Boots the host (hosted services included) — the only reason this
@@ -303,7 +295,7 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
         _ = AccountTestHost.CreateClient(factory);
 
         factory.Services.GetRequiredService<IPluginRegistry>().RegisterAgentEngine(
-            Provider, new OpenAICompatibleAgentEngine(_fixture.Client));
+            Provider, new OpenAICompatibleAgentEngine(fixture.Client));
 
         var adminId = await AdminTestHost.SeedUserAsync(
             factory, $"{marker}@example.test", UserRole.Admin);
@@ -388,7 +380,7 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
             HttpStatusCode Status,
             string? Authorization);
 
-        private readonly List<RecordedCall> _calls = new();
+        private readonly List<RecordedCall> _calls = [];
 
         public IReadOnlyList<RecordedCall> Calls
         {
@@ -396,7 +388,7 @@ public class AdminModelsFlowIntegrationTests : IClassFixture<OpenAIMockFixture>,
             {
                 lock (_calls)
                 {
-                    return _calls.ToArray();
+                    return [.. _calls];
                 }
             }
         }
