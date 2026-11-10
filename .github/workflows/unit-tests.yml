@@ -1,0 +1,49 @@
+# Unit-test workflow: compiles and runs the EmailAgent.UnitTests project.
+# Created on feature/testing-actions; targets the testing branch.
+
+name: Unit Tests
+
+on:
+  push:
+    branches: [feature/testing-actions, testing, main]
+  pull_request:
+    branches: [testing, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "true"
+
+jobs:
+  unit-tests:
+    name: compile-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore unit-test project
+        run: dotnet restore tests/EmailAgent.UnitTests/EmailAgent.UnitTests.csproj
+
+      - name: Compile unit tests
+        run: dotnet build tests/EmailAgent.UnitTests/EmailAgent.UnitTests.csproj --no-restore
+
+      - name: Execute unit tests
+        run: dotnet test tests/EmailAgent.UnitTests/EmailAgent.UnitTests.csproj --no-build --logger "trx;LogFileName=unit-tests.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: "**/*.trx"
+          if-no-files-found: ignore
+          retention-days: 7
