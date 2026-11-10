@@ -27,22 +27,10 @@ namespace EmailAgent.Api.Models;
 /// never returned by any endpoint, never logged and never audited.
 /// </para>
 /// </remarks>
-public sealed class EncryptedModelApiKeyStore
+public sealed class EncryptedModelApiKeyStore(EmailAgentDbContext db, IEncryptionService encryption, TimeProvider clock)
 {
     /// <summary><c>encrypted_blobs.purpose</c> of a model API key (Q-E7).</summary>
     public const string ModelApiKeyPurpose = "model_api_key";
-
-    private readonly EmailAgentDbContext _db;
-    private readonly IEncryptionService _encryption;
-    private readonly TimeProvider _clock;
-
-    public EncryptedModelApiKeyStore(
-        EmailAgentDbContext db, IEncryptionService encryption, TimeProvider clock)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _encryption = encryption ?? throw new ArgumentNullException(nameof(encryption));
-        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
 
     /// <summary>
     /// Wraps <paramref name="apiKey"/> under the system key and stores a fresh
@@ -63,7 +51,7 @@ public sealed class EncryptedModelApiKeyStore
         var plaintext = Encoding.UTF8.GetBytes(apiKey);
         try
         {
-            var wrapped = _encryption.WrapWithSystemKey(plaintext);
+            var wrapped = encryption.WrapWithSystemKey(plaintext);
             var blob = new EncryptedBlob
             {
                 Id = Guid.NewGuid(),
@@ -71,12 +59,12 @@ public sealed class EncryptedModelApiKeyStore
                 Ciphertext = wrapped.Ciphertext,
                 Nonce = wrapped.Nonce,
                 Purpose = ModelApiKeyPurpose,
-                CreatedAt = _clock.GetUtcNow(),
-                RotatedAt = _clock.GetUtcNow(),
+                CreatedAt = clock.GetUtcNow(),
+                RotatedAt = clock.GetUtcNow(),
             };
 
-            _db.EncryptedBlobs.Add(blob);
-            await _db.SaveChangesAsync(ct);
+            db.EncryptedBlobs.Add(blob);
+            await db.SaveChangesAsync(ct);
             return blob.Id;
         }
         finally
@@ -96,7 +84,7 @@ public sealed class EncryptedModelApiKeyStore
     /// </summary>
     public async Task<string> ReadAsync(Guid blobId, CancellationToken ct)
     {
-        var blob = await _db.EncryptedBlobs.AsNoTracking()
+        var blob = await db.EncryptedBlobs.AsNoTracking()
                 .FirstOrDefaultAsync(b => b.Id == blobId, ct)
             ?? throw new EncryptedBlobNotFoundException(blobId);
 
@@ -105,7 +93,7 @@ public sealed class EncryptedModelApiKeyStore
             throw new InvalidBlobPurposeException(blob.Purpose);
         }
 
-        var plaintext = _encryption.UnwrapWithSystemKey(blob.Ciphertext, blob.Nonce);
+        var plaintext = encryption.UnwrapWithSystemKey(blob.Ciphertext, blob.Nonce);
         try
         {
             return Encoding.UTF8.GetString(plaintext);
@@ -122,7 +110,7 @@ public sealed class EncryptedModelApiKeyStore
     /// or roll back together.
     /// </summary>
     public Task DeleteAsync(Guid blobId, CancellationToken ct)
-        => _db.EncryptedBlobs
+        => db.EncryptedBlobs
             .Where(b => b.Id == blobId)
             .ExecuteDeleteAsync(ct);
 }

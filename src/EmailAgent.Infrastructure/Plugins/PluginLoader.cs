@@ -127,7 +127,7 @@ public sealed class PluginLoader : IHostedService
     /// <summary>Serializes whole reload cycles (a monitor lock cannot span the awaits below).</summary>
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
 
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private readonly List<LoadedPlugin> _loaded = new();
 
     /// <summary>Creates the loader; every dependency is a singleton (registered in Program.cs).</summary>

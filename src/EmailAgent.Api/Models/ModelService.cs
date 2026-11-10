@@ -82,30 +82,15 @@ public sealed class ModelProbeFailedException : Exception
 /// D3). The endpoint layer and the friend test suites consume it in-assembly.
 /// </para>
 /// </remarks>
-internal sealed class ModelService
+internal sealed class ModelService(
+    EmailAgentDbContext db,
+    IModelProbeService probe,
+    EncryptedModelApiKeyStore store,
+    IAuditLogger audit,
+    TimeProvider clock)
 {
     /// <summary><c>audit_log.target_type</c> / probe target type for catalog events.</summary>
     private const string CatalogTargetType = "model_catalog";
-
-    private readonly EmailAgentDbContext _db;
-    private readonly IModelProbeService _probe;
-    private readonly EncryptedModelApiKeyStore _store;
-    private readonly IAuditLogger _audit;
-    private readonly TimeProvider _clock;
-
-    public ModelService(
-        EmailAgentDbContext db,
-        IModelProbeService probe,
-        EncryptedModelApiKeyStore store,
-        IAuditLogger audit,
-        TimeProvider clock)
-    {
-        _db = db ?? throw new ArgumentNullException(nameof(db));
-        _probe = probe ?? throw new ArgumentNullException(nameof(probe));
-        _store = store ?? throw new ArgumentNullException(nameof(store));
-        _audit = audit ?? throw new ArgumentNullException(nameof(audit));
-        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
 
     /// <summary>
     /// <c>GET /v1/admin/models</c> — one keyset page of the catalog
@@ -129,7 +114,7 @@ internal sealed class ModelService
         }
 
         // Read-only projection: no need to track up to 100 rows per page.
-        IQueryable<ModelCatalogEntry> query = _db.ModelCatalog.AsNoTracking();
+        IQueryable<ModelCatalogEntry> query = db.ModelCatalog.AsNoTracking();
 
         if (enabled is { } enabledValue)
         {
@@ -178,7 +163,7 @@ internal sealed class ModelService
     /// <summary><c>GET /v1/admin/models/{id}</c> — 404 <c>/errors/model-not-found</c> when unknown.</summary>
     public async Task<ModelDto> GetAsync(Guid id, CancellationToken ct)
     {
-        var entry = await _db.ModelCatalog.AsNoTracking()
+        var entry = await db.ModelCatalog.AsNoTracking()
                 .FirstOrDefaultAsync(model => model.Id == id, ct)
             ?? throw new ModelNotFoundException(id);
         return ToDto(entry);
@@ -206,18 +191,18 @@ internal sealed class ModelService
         // Probe BEFORE any write (SQ-M3-11). On Fail the probe already emitted
         // its ModelProbeFailed row (target_id NULL on this path) — that row is
         // the ONLY write; no model_catalog / encrypted_blobs row exists.
-        var probe = await _probe.ProbeAsync(
+        var probeResult = await probe.ProbeAsync(
             new OpenAICompatibleConfig(baseUrl!, apiKey!, modelName!),
             correlationModelId: null,
             ct);
-        if (probe.Outcome == ProbeOutcome.Fail)
+        if (probeResult.Outcome == ProbeOutcome.Fail)
         {
-            throw new ModelProbeFailedException(probe.Reason, probe.ResponseExcerpt);
+            throw new ModelProbeFailedException(probeResult.Reason, probeResult.ResponseExcerpt);
         }
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
-        var blobId = await _store.WriteAsync(apiKey!, ct);
+        var blobId = await store.WriteAsync(apiKey!, ct);
         var entry = new ModelCatalogEntry
         {
             Id = Guid.NewGuid(),
@@ -230,17 +215,17 @@ internal sealed class ModelService
             PricePer1kOutputUsd = request.PricePer1kOutputUsd,
             Enabled = request.Enabled ?? true,
             CreatedBy = actor.UserId,
-            CreatedAt = _clock.GetUtcNow(),
+            CreatedAt = clock.GetUtcNow(),
             // Pass and PassFromCache are both a passing gate (task scope table);
             // the probe result's ProbedAt is this call's timestamp.
-            ToolCallingProbedAt = probe.ProbedAt,
+            ToolCallingProbedAt = probeResult.ProbedAt,
             ToolCallingProbeResult = ToolCallingProbeResult.Pass,
         };
 
-        _db.ModelCatalog.Add(entry);
-        await _db.SaveChangesAsync(ct);
+        db.ModelCatalog.Add(entry);
+        await db.SaveChangesAsync(ct);
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
             ActorEvent(
                 actor, AuditActions.CreateModel, entry.Id,
                 new Dictionary<string, object?>
@@ -250,8 +235,8 @@ internal sealed class ModelService
                     ["provider"] = entry.Provider,
                     ["base_url"] = entry.BaseUrl,
                     ["model_name"] = entry.ModelName,
-                    ["probed_at"] = probe.ProbedAt,
-                    ["probe_outcome"] = probe.Outcome.ToString(),
+                    ["probed_at"] = probeResult.ProbedAt,
+                    ["probe_outcome"] = probeResult.Outcome.ToString(),
                 }),
             ct);
 
@@ -276,7 +261,7 @@ internal sealed class ModelService
         // Loaded (but not yet mutated) so a probe failure can prove "no fields
         // are updated" — and so the fail path's audit write cannot flush a
         // pending change through the shared scoped context.
-        var entry = await _db.ModelCatalog.FirstOrDefaultAsync(
+        var entry = await db.ModelCatalog.FirstOrDefaultAsync(
                 model => model.Id == id, ct)
             ?? throw new ModelNotFoundException(id);
 
@@ -300,43 +285,43 @@ internal sealed class ModelService
                     OpenAICompatibleConfigSchema.Build());
             }
 
-            apiKey = await _store.ReadAsync(storedBlobId, ct);
+            apiKey = await store.ReadAsync(storedBlobId, ct);
         }
 
         ValidateEngineConfig(baseUrl, apiKey, modelName);
 
         // Probe BEFORE mutating (SQ-M3-11 / SQ-M3-13): every PATCH probes,
         // correlation id = the row so the fail row targets it.
-        var probe = await _probe.ProbeAsync(
+        var probeResult = await probe.ProbeAsync(
             new OpenAICompatibleConfig(baseUrl, apiKey, modelName),
             correlationModelId: id,
             ct);
-        if (probe.Outcome == ProbeOutcome.Fail)
+        if (probeResult.Outcome == ProbeOutcome.Fail)
         {
-            throw new ModelProbeFailedException(probe.Reason, probe.ResponseExcerpt);
+            throw new ModelProbeFailedException(probeResult.Reason, probeResult.ResponseExcerpt);
         }
 
         var changedFields = ChangedFields(request);
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         if (request.ApiKey is not null)
         {
             // Key rotation: write the new blob, point the ref at it, then drop
             // the old row — all inside this transaction (task acceptance
             // criterion; no FK on the soft ref, so the order is free).
-            var newBlobId = await _store.WriteAsync(request.ApiKey, ct);
+            var newBlobId = await store.WriteAsync(request.ApiKey, ct);
             var previousBlobId = entry.ApiKeySecretRef is not null
                 && Guid.TryParse(entry.ApiKeySecretRef, out var oldBlobId)
                 ? oldBlobId
                 : (Guid?)null;
 
             entry.ApiKeySecretRef = newBlobId.ToString();
-            await _db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(ct);
 
             if (previousBlobId is { } blobToDelete)
             {
-                await _store.DeleteAsync(blobToDelete, ct);
+                await store.DeleteAsync(blobToDelete, ct);
             }
         }
 
@@ -377,19 +362,19 @@ internal sealed class ModelService
 
         // Refresh from the probe result (task step 3): Pass and PassFromCache
         // are both a passing gate, so the row keeps a live Pass.
-        entry.ToolCallingProbedAt = probe.ProbedAt;
+        entry.ToolCallingProbedAt = probeResult.ProbedAt;
         entry.ToolCallingProbeResult = ToolCallingProbeResult.Pass;
-        await _db.SaveChangesAsync(ct);
+        await db.SaveChangesAsync(ct);
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
             ActorEvent(
                 actor, AuditActions.UpdateModel, entry.Id,
                 new Dictionary<string, object?>
                 {
                     ["model_id"] = entry.Id,
                     ["changed_fields"] = changedFields,
-                    ["probed_at"] = probe.ProbedAt,
-                    ["probe_outcome"] = probe.Outcome.ToString(),
+                    ["probed_at"] = probeResult.ProbedAt,
+                    ["probe_outcome"] = probeResult.Outcome.ToString(),
                 }),
             ct);
 
@@ -406,26 +391,26 @@ internal sealed class ModelService
     {
         ArgumentNullException.ThrowIfNull(actor);
 
-        var entry = await _db.ModelCatalog.FirstOrDefaultAsync(
+        var entry = await db.ModelCatalog.FirstOrDefaultAsync(
                 model => model.Id == id, ct)
             ?? throw new ModelNotFoundException(id);
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
         var blobId = entry.ApiKeySecretRef is not null
             && Guid.TryParse(entry.ApiKeySecretRef, out var parsedBlobId)
             ? parsedBlobId
             : (Guid?)null;
 
-        _db.ModelCatalog.Remove(entry);
-        await _db.SaveChangesAsync(ct);
+        db.ModelCatalog.Remove(entry);
+        await db.SaveChangesAsync(ct);
 
         if (blobId is { } keyBlobId)
         {
-            await _store.DeleteAsync(keyBlobId, ct);
+            await store.DeleteAsync(keyBlobId, ct);
         }
 
-        await _audit.LogAsync(
+        await audit.LogAsync(
             ActorEvent(
                 actor, AuditActions.DeleteModel, entry.Id,
                 new Dictionary<string, object?>

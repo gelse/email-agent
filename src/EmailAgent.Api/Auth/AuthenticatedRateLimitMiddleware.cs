@@ -19,7 +19,7 @@ public sealed class AuthenticatedRateLimitMiddleware
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     private readonly RequestDelegate _next;
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private readonly Dictionary<string, WindowEntry> _counters = new();
 
     public AuthenticatedRateLimitMiddleware(RequestDelegate next)
