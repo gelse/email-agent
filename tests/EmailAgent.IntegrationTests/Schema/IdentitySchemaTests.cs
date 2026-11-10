@@ -13,17 +13,10 @@ namespace EmailAgent.IntegrationTests.Schema;
 /// <see cref="InitialSchemaTests"/>).
 /// </summary>
 [Collection("Postgres")]
-public class IdentitySchemaTests
+public class IdentitySchemaTests(PostgresFixture postgres)
 {
     private static readonly SemaphoreSlim MigrationGate = new(1, 1);
     private static string? _migratedConnectionString;
-
-    private readonly PostgresFixture _postgres;
-
-    public IdentitySchemaTests(PostgresFixture postgres)
-    {
-        _postgres = postgres;
-    }
 
     [Theory]
     [InlineData("AspNetRoles")]
@@ -61,7 +54,7 @@ public class IdentitySchemaTests
     /// <summary>Same one-time migration gate as the other schema test classes.</summary>
     private async Task<string> MigrateAsync()
     {
-        var connectionString = _postgres.ConnectionString;
+        var connectionString = postgres.ConnectionString;
 
         await MigrationGate.WaitAsync();
         try

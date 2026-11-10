@@ -17,17 +17,9 @@ namespace EmailAgent.IntegrationTests.M2EndToEnd;
 /// </summary>
 [Trait("Category", "M2EndToEnd")]
 [Collection(M2E2ECollection.Name)]
-public sealed class InvalidCredentialsTests : IClassFixture<GreenMailFixture>
+public sealed class InvalidCredentialsTests(PostgresFixture postgres, GreenMailFixture greenMail)
+    : IClassFixture<GreenMailFixture>
 {
-    private readonly PostgresFixture _postgres;
-    private readonly GreenMailFixture _greenMail;
-
-    public InvalidCredentialsTests(PostgresFixture postgres, GreenMailFixture greenMail)
-    {
-        _postgres = postgres;
-        _greenMail = greenMail;
-    }
-
     /// <summary>
     /// Smoke flow 2, step 2: <c>POST /v1/user/sources/test-connection</c> with
     /// <c>password='wrong'</c> → HTTP 200 <c>{ok:false, error:"authentication
@@ -37,7 +29,7 @@ public sealed class InvalidCredentialsTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task InvalidCredentials_TestConnection_ReturnsOkFalse_WithAuthError()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -46,7 +38,7 @@ public sealed class InvalidCredentialsTests : IClassFixture<GreenMailFixture>
             new
             {
                 type_id = SourcesTestHost.ImapTypeId,
-                config = _greenMail.CreateConfig(password: "definitely-not-the-password"),
+                config = greenMail.CreateConfig(password: "definitely-not-the-password"),
             }));
 
         response.StatusCode.Should().Be(
@@ -68,7 +60,7 @@ public sealed class InvalidCredentialsTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task InvalidCredentials_BadPort_Returns400_ProblemDetails_WithErrors()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 

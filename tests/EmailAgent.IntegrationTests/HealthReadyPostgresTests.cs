@@ -7,19 +7,12 @@ namespace EmailAgent.IntegrationTests;
 /// <summary>
 /// M1T1 readiness test against a healthy Postgres (Testcontainers).
 /// </summary>
-public class HealthReadyPostgresTests : IClassFixture<PostgresFixture>
+public class HealthReadyPostgresTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
-    private readonly PostgresFixture _postgres;
-
-    public HealthReadyPostgresTests(PostgresFixture postgres)
-    {
-        _postgres = postgres;
-    }
-
     [Fact]
     public async Task Health_Ready_AfterPostgresHealthy_Returns200()
     {
-        await using var factory = ApiTestFactory.Create(_postgres.ConnectionString);
+        await using var factory = ApiTestFactory.Create(postgres.ConnectionString);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/health/ready");

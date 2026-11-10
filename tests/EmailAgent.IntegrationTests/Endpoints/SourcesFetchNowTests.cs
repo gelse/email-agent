@@ -23,17 +23,9 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class SourcesFetchNowTests : IClassFixture<GreenMailFixture>
+public class SourcesFetchNowTests(PostgresFixture postgres, GreenMailFixture greenmail)
+    : IClassFixture<GreenMailFixture>
 {
-    private readonly PostgresFixture _postgres;
-    private readonly GreenMailFixture _greenmail;
-
-    public SourcesFetchNowTests(PostgresFixture postgres, GreenMailFixture greenmail)
-    {
-        _postgres = postgres;
-        _greenmail = greenmail;
-    }
-
     /// <summary>
     /// Milestone row "Dedupe-keyed record per new message": three seeded
     /// messages become three <c>processed_messages</c> rows keyed by
@@ -284,15 +276,15 @@ public class SourcesFetchNowTests : IClassFixture<GreenMailFixture>
     /// <summary>Purges Greenmail, seeds <paramref name="count"/> messages and creates an alice source for a fresh user.</summary>
     private async Task<(SourcesHost Host, Guid SourceId)> SeedMailboxAndCreateSourceAsync(int count)
     {
-        await _greenmail.PurgeMailAsync();
+        await greenmail.PurgeMailAsync();
         for (var i = 1; i <= count; i++)
         {
-            await _greenmail.SendAsync($"m2t5 message {i}", $"body of message {i}");
+            await greenmail.SendAsync($"m2t5 message {i}", $"body of message {i}");
         }
 
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         var created = await SourcesTestHost.CreateSourceAsync(
-            host, "greenmail inbox", _greenmail.CreateConfig());
+            host, "greenmail inbox", greenmail.CreateConfig());
         return (host, SourcesTestHost.IdOf(created));
     }
 
@@ -333,11 +325,13 @@ public class SourcesFetchNowTests : IClassFixture<GreenMailFixture>
     }
 
     private static List<Type> EngineRegistryContractTypes()
-        => AppDomain.CurrentDomain.GetAssemblies()
-            .SelectMany(SafeGetTypes)
-            .Where(t => t is not null && t.Name == "IEngineRegistry")
-            .Select(t => t!)
-            .ToList();
+        =>
+        [
+            .. AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(SafeGetTypes)
+                .Where(t => t is not null && t.Name == "IEngineRegistry")
+                .Select(t => t!)
+        ];
 
     private static IEnumerable<Type?> SafeGetTypes(System.Reflection.Assembly assembly)
     {

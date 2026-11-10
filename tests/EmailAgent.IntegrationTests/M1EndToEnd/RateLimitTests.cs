@@ -26,16 +26,12 @@ namespace EmailAgent.IntegrationTests.M1EndToEnd;
 /// </summary>
 [Trait("Category", "M1EndToEnd")]
 [Collection("Postgres")]
-public class RateLimitTests
+public class RateLimitTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public RateLimitTests(PostgresFixture postgres) => _postgres = postgres;
-
     [Fact]
     public async Task SixLoginsPerMinute_PerIP_SixthReturns429_WithRetryAfter()
     {
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var client = AccountTestHost.CreateClient(factory);
 

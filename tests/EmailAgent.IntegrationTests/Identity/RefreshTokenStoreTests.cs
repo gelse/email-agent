@@ -32,17 +32,10 @@ namespace EmailAgent.IntegrationTests.Identity;
 /// scopes so they observe committed state, like a subsequent request would.
 /// </summary>
 [Collection("Postgres")]
-public class RefreshTokenStoreTests
+public class RefreshTokenStoreTests(PostgresFixture postgres)
 {
     private static readonly SemaphoreSlim MigrationGate = new(1, 1);
     private static string? _migratedConnectionString;
-
-    private readonly PostgresFixture _postgres;
-
-    public RefreshTokenStoreTests(PostgresFixture postgres)
-    {
-        _postgres = postgres;
-    }
 
     [Fact]
     public async Task Issue_Then_FindByHash_Returns_Same_Record()
@@ -303,7 +296,7 @@ public class RefreshTokenStoreTests
     /// <summary>Applies every migration once per shared Postgres container.</summary>
     private async Task<string> MigrateAsync()
     {
-        var connectionString = _postgres.ConnectionString;
+        var connectionString = postgres.ConnectionString;
 
         await MigrationGate.WaitAsync();
         try

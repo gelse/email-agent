@@ -39,7 +39,8 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 
 [Trait("Category", "M3T6")]
 [Collection("Postgres")]
-public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
+public class AdminTestCompletionTests(OpenAIMockFixture fixture, PostgresFixture postgres)
+    : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
 {
     /// <summary>Throwaway integration-test api_key (never a real credential).</summary>
     private const string ApiKey = "sk-test-redacted-m3t6";
@@ -61,15 +62,7 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
         "duration_ms",
     ];
 
-    private readonly OpenAIMockFixture _fixture;
-    private readonly PostgresFixture _postgres;
     private string? _marker;
-
-    public AdminTestCompletionTests(OpenAIMockFixture fixture, PostgresFixture postgres)
-    {
-        _fixture = fixture;
-        _postgres = postgres;
-    }
 
     // -----------------------------------------------------------------------
     // Happy path
@@ -114,7 +107,7 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
 
         // Round trip: the mock received both prompts (SQ-M3-9 markers split by
         // the request builder) and never the key.
-        var sent = _fixture.LastRequestBody;
+        var sent = fixture.LastRequestBody;
         sent.Should().NotBeNull("the engine posted to the in-process mock");
         sent!.Should().Contain(SystemPrompt, "system_prompt reaches the provider");
         sent.Should().Contain(UserPrompt, "user_prompt reaches the provider");
@@ -554,7 +547,7 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
         });
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        var sent = _fixture.LastRequestBody;
+        var sent = fixture.LastRequestBody;
         sent.Should().NotBeNull("the engine posted to the in-process mock");
         using var document = JsonDocument.Parse(sent!);
         var body = document.RootElement.Clone();
@@ -600,10 +593,10 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
             return;
         }
 
-        await AccountTestHost.MigrateAsync(_postgres);
+        await AccountTestHost.MigrateAsync(postgres);
         await using var db = new EmailAgentDbContext(
             new DbContextOptionsBuilder<EmailAgentDbContext>()
-                .UseNpgsql(_postgres.ConnectionString)
+                .UseNpgsql(postgres.ConnectionString)
                 .Options);
 
         var rows = await db.ModelCatalog.AsNoTracking()
@@ -663,14 +656,14 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
         _marker = marker;
 
         // Deterministic mock state before any completion can run.
-        await _fixture.SetScenarioAsync(scenario);
+        await fixture.SetScenarioAsync(scenario);
 
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var factory = ApiTestFactory.Create(connectionString);
         var client = AccountTestHost.CreateClient(factory); // boots the host (hosted services included)
 
         factory.Services.GetRequiredService<IPluginRegistry>().RegisterAgentEngine(
-            Provider, new OpenAICompatibleAgentEngine(_fixture.Client));
+            Provider, new OpenAICompatibleAgentEngine(fixture.Client));
 
         var adminId = await AdminTestHost.SeedUserAsync(
             factory, $"{marker}@example.test", UserRole.Admin);
@@ -713,9 +706,11 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
     /// <summary>The RFC 7807 errors[] wire names of a problem document.</summary>
     private static string[] ErrorNames(JsonElement problem)
         => problem.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array
-            ? errors.EnumerateArray()
-                .Select(error => error.GetProperty("name").GetString() ?? string.Empty)
-                .ToArray()
+            ?
+            [
+                .. errors.EnumerateArray()
+                    .Select(error => error.GetProperty("name").GetString() ?? string.Empty)
+            ]
             : [];
 
     /// <summary>§13.14: every authenticated response carries X-RateLimit-Limit/-Remaining/-Reset.</summary>
@@ -742,7 +737,7 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
             .ToLowerInvariant();
 
     /// <summary>Engine round-trips against this fixture's mock, summed over scenarios.</summary>
-    private int TotalRequests() => _fixture.RequestCounts.Values.Sum();
+    private int TotalRequests() => fixture.RequestCounts.Values.Sum();
 
     // -----------------------------------------------------------------------
     // Database helpers
@@ -768,7 +763,7 @@ public class AdminTestCompletionTests : IClassFixture<OpenAIMockFixture>, IAsync
                 Id = id,
                 DisplayName = $"{host.Marker} model",
                 Provider = provider,
-                BaseUrl = _fixture.BaseUrl,
+                BaseUrl = fixture.BaseUrl,
                 ModelName = host.Marker,
                 Enabled = enabled,
                 CreatedBy = host.AdminId,

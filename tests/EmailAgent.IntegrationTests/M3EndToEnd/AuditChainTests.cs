@@ -35,7 +35,8 @@ namespace EmailAgent.IntegrationTests.M3EndToEnd;
 
 [Trait("Category", "M3EndToEnd")]
 [Collection(M3E2ECollection.Name)]
-public sealed class AuditChainTests : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
+public sealed class AuditChainTests(PostgresFixture postgres, OpenAIMockFixture mock)
+    : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
 {
     /// <summary>The five M3 audit actions that must all appear in the chain (task acceptance).</summary>
     private static readonly string[] M3Actions =
@@ -47,15 +48,7 @@ public sealed class AuditChainTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
         AuditActions.TestModelCompletion,
     ];
 
-    private readonly PostgresFixture _postgres;
-    private readonly OpenAIMockFixture _mock;
-    private readonly List<string> _markers = new();
-
-    public AuditChainTests(PostgresFixture postgres, OpenAIMockFixture mock)
-    {
-        _postgres = postgres;
-        _mock = mock;
-    }
+    private readonly List<string> _markers = [];
 
     /// <summary>
     /// <c>AuditChain_AfterM3Flow_StillValid</c>: every audit row written by the
@@ -68,7 +61,7 @@ public sealed class AuditChainTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var marker = M3TestHarness.NewMarker();
         _markers.Add(marker);
-        var host = await M3TestHarness.CreateHostAsync(_postgres, marker, _mock, "probe-pass");
+        var host = await M3TestHarness.CreateHostAsync(postgres, marker, mock, "probe-pass");
         await using var factory = host.Factory;
 
         // ------------------------------------------------------------------
@@ -79,7 +72,7 @@ public sealed class AuditChainTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
         // (1) create_model — a passing probe writes row + key blob + audit row.
         var created = await M3TestHarness.CreateModelAsync(
             host,
-            M3TestHarness.CreateBody(host.Marker, _mock.BaseUrl, $"{marker} chain model"));
+            M3TestHarness.CreateBody(host.Marker, mock.BaseUrl, $"{marker} chain model"));
         var modelId = created.GetProperty("id").GetGuid();
 
         // (2) update_model — a within-window display_name rename is served
@@ -100,20 +93,20 @@ public sealed class AuditChainTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
 
         // (3) model_probe_failed — a failing probe writes NO row and NO blob,
         //     only the fail-only audit row with target_id IS NULL.
-        await _mock.SetScenarioAsync("probe-fail");
+        await mock.SetScenarioAsync("probe-fail");
         using (var failed = await M3TestHarness.SendAsync(
                    host,
                    HttpMethod.Post,
                    "/v1/admin/models",
                    M3TestHarness.CreateBody(
-                       host.Marker, _mock.BaseUrl, $"{marker} doomed", $"{marker}-doomed")))
+                       host.Marker, mock.BaseUrl, $"{marker} doomed", $"{marker}-doomed")))
         {
             var problem = await AccountTestHost.ReadProblemAsync(failed, HttpStatusCode.BadRequest);
             problem.GetProperty("type").GetString().Should().Be("/errors/model-probe-failed");
         }
 
         // (4) test_model_completion — the manual tool round-trips the prompt.
-        await _mock.SetScenarioAsync("happy");
+        await mock.SetScenarioAsync("happy");
         using (var completion = await M3TestHarness.SendAsync(
                    host,
                    HttpMethod.Post,
@@ -182,13 +175,12 @@ public sealed class AuditChainTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
 
         rows.Where(row => row.TargetId == modelId.ToString())
             .Select(row => row.Action)
-            .Should().Contain(new[]
-            {
+            .Should().Contain([
                 AuditActions.CreateModel,
                 AuditActions.UpdateModel,
                 AuditActions.TestModelCompletion,
-                AuditActions.DeleteModel,
-            }, "the four model-scoped actions all target this model id");
+                AuditActions.DeleteModel
+            ], "the four model-scoped actions all target this model id");
 
         // The probe-fail row correlates to THIS flow by its unique marker,
         // inside the filter itself: the M3EndToEnd collection runs
@@ -229,7 +221,7 @@ public sealed class AuditChainTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         foreach (var marker in _markers)
         {
-            await M3TestHarness.CleanupAsync(_postgres, marker);
+            await M3TestHarness.CleanupAsync(postgres, marker);
         }
     }
 

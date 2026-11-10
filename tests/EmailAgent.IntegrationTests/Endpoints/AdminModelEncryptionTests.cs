@@ -35,7 +35,8 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 
 [Trait("Category", "M3T3")]
 [Collection("Postgres")]
-public class AdminModelEncryptionTests : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
+public class AdminModelEncryptionTests(OpenAIMockFixture fixture, PostgresFixture postgres)
+    : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
 {
     /// <summary>Throwaway integration-test api_key (never a real credential).</summary>
     private const string ApiKey = "sk-m3t3enc-test-key";
@@ -62,15 +63,7 @@ public class AdminModelEncryptionTests : IClassFixture<OpenAIMockFixture>, IAsyn
         "price_per_1k_output_usd",
     ];
 
-    private readonly OpenAIMockFixture _fixture;
-    private readonly PostgresFixture _postgres;
     private string? _marker;
-
-    public AdminModelEncryptionTests(OpenAIMockFixture fixture, PostgresFixture postgres)
-    {
-        _fixture = fixture;
-        _postgres = postgres;
-    }
 
     // -----------------------------------------------------------------------
     // System-key binding.
@@ -206,10 +199,10 @@ public class AdminModelEncryptionTests : IClassFixture<OpenAIMockFixture>, IAsyn
             return;
         }
 
-        await AccountTestHost.MigrateAsync(_postgres);
+        await AccountTestHost.MigrateAsync(postgres);
         await using var db = new EmailAgentDbContext(
             new DbContextOptionsBuilder<EmailAgentDbContext>()
-                .UseNpgsql(_postgres.ConnectionString)
+                .UseNpgsql(postgres.ConnectionString)
                 .Options);
 
         var rows = await db.ModelCatalog.AsNoTracking()
@@ -260,9 +253,9 @@ public class AdminModelEncryptionTests : IClassFixture<OpenAIMockFixture>, IAsyn
         // ≥ 32 bytes, unique per host, throwaway test material (never a real secret).
         var systemKey = $"m3t3enc-system-kek-{Guid.NewGuid():N}";
 
-        await _fixture.SetScenarioAsync("probe-pass");
+        await fixture.SetScenarioAsync("probe-pass");
 
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var factory = ApiTestFactory.Create(connectionString)
             .WithWebHostBuilder(builder =>
             {
@@ -277,7 +270,7 @@ public class AdminModelEncryptionTests : IClassFixture<OpenAIMockFixture>, IAsyn
                     // in-process OpenAIMock's TestServer client — no probe
                     // may ever reach a real provider (AGENTS.md constraint).
                     services.RemoveAll<Func<IAgentEngine>>();
-                    Func<IAgentEngine> engine = () => new OpenAICompatibleAgentEngine(_fixture.Client);
+                    Func<IAgentEngine> engine = () => new OpenAICompatibleAgentEngine(fixture.Client);
                     services.AddSingleton(engine);
                 });
             });
@@ -285,7 +278,7 @@ public class AdminModelEncryptionTests : IClassFixture<OpenAIMockFixture>, IAsyn
         var adminId = await AdminTestHost.SeedUserAsync(
             factory, $"{marker}@example.test", UserRole.Admin);
         var bearer = await AdminTestHost.BearerAsync(factory, adminId, "Admin");
-        return new ModelHost(factory, client, adminId, bearer, marker, systemKey, _fixture.BaseUrl);
+        return new ModelHost(factory, client, adminId, bearer, marker, systemKey, fixture.BaseUrl);
     }
 
     // -----------------------------------------------------------------------

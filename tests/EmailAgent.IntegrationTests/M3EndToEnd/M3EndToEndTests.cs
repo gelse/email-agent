@@ -52,17 +52,10 @@ public sealed class M3E2ECollection : ICollectionFixture<PostgresFixture>
 
 [Trait("Category", "M3EndToEnd")]
 [Collection(M3E2ECollection.Name)]
-public sealed class M3EndToEndTests : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
+public sealed class M3EndToEndTests(PostgresFixture postgres, OpenAIMockFixture mock)
+    : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
 {
-    private readonly PostgresFixture _postgres;
-    private readonly OpenAIMockFixture _mock;
-    private readonly List<string> _markers = new();
-
-    public M3EndToEndTests(PostgresFixture postgres, OpenAIMockFixture mock)
-    {
-        _postgres = postgres;
-        _mock = mock;
-    }
+    private readonly List<string> _markers = [];
 
     // -----------------------------------------------------------------------
     // Smoke flow 1 — admin adds the passing model (M3 exit criterion 1)
@@ -85,7 +78,7 @@ public sealed class M3EndToEndTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
             host,
             HttpMethod.Post,
             "/v1/admin/models",
-            M3TestHarness.CreateBody(host.Marker, _mock.BaseUrl));
+            M3TestHarness.CreateBody(host.Marker, mock.BaseUrl));
 
         response.StatusCode.Should().Be(HttpStatusCode.Created, "a passing probe yields 201");
         TotalRequests().Should().Be(
@@ -161,7 +154,7 @@ public sealed class M3EndToEndTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
             host,
             HttpMethod.Post,
             "/v1/admin/models",
-            M3TestHarness.CreateBody(host.Marker, _mock.BaseUrl));
+            M3TestHarness.CreateBody(host.Marker, mock.BaseUrl));
 
         var problem = await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.BadRequest);
         problem.GetProperty("type").GetString().Should().Be("/errors/model-probe-failed");
@@ -202,13 +195,13 @@ public sealed class M3EndToEndTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
         var host = await CreateHostAsync("probe-pass");
         await using var factory = host.Factory;
         var created = await M3TestHarness.CreateModelAsync(
-            host, M3TestHarness.CreateBody(host.Marker, _mock.BaseUrl));
+            host, M3TestHarness.CreateBody(host.Marker, mock.BaseUrl));
         var modelId = created.GetProperty("id").GetGuid();
 
         // Smoke step 3.1: switch the very same instance to `happy` — engine-
         // driven calls carry no X-Test-Scenario header, the active scenario is
         // how the smoke (and here, the test) steers the instance.
-        await _mock.SetScenarioAsync("happy");
+        await mock.SetScenarioAsync("happy");
         var requestsBefore = TotalRequests();
 
         using var response = await M3TestHarness.SendAsync(
@@ -247,10 +240,10 @@ public sealed class M3EndToEndTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
         var host = await CreateHostAsync("probe-pass");
         await using var factory = host.Factory;
         var created = await M3TestHarness.CreateModelAsync(
-            host, M3TestHarness.CreateBody(host.Marker, _mock.BaseUrl));
+            host, M3TestHarness.CreateBody(host.Marker, mock.BaseUrl));
         var modelId = created.GetProperty("id").GetGuid();
 
-        await _mock.SetScenarioAsync("happy");
+        await mock.SetScenarioAsync("happy");
         using var response = await M3TestHarness.SendAsync(
             host,
             HttpMethod.Post,
@@ -300,7 +293,7 @@ public sealed class M3EndToEndTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
         var host = await CreateHostAsync("probe-pass");
         await using var factory = host.Factory;
         var created = await M3TestHarness.CreateModelAsync(
-            host, M3TestHarness.CreateBody(host.Marker, _mock.BaseUrl));
+            host, M3TestHarness.CreateBody(host.Marker, mock.BaseUrl));
         var modelId = created.GetProperty("id").GetGuid();
         var row = await M3TestHarness.FindRowAsync(factory, modelId);
         row.Should().NotBeNull("the created row must exist before DELETE");
@@ -350,7 +343,7 @@ public sealed class M3EndToEndTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         foreach (var marker in _markers)
         {
-            await M3TestHarness.CleanupAsync(_postgres, marker);
+            await M3TestHarness.CleanupAsync(postgres, marker);
         }
     }
 
@@ -367,11 +360,11 @@ public sealed class M3EndToEndTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var marker = M3TestHarness.NewMarker();
         _markers.Add(marker);
-        return M3TestHarness.CreateHostAsync(_postgres, marker, _mock, scenario);
+        return M3TestHarness.CreateHostAsync(postgres, marker, mock, scenario);
     }
 
     /// <summary>Engine round-trips against this fixture's mock, summed over scenarios.</summary>
-    private int TotalRequests() => _mock.RequestCounts.Values.Sum();
+    private int TotalRequests() => mock.RequestCounts.Values.Sum();
 
     /// <summary>
     /// Independent re-derivation of SQ-M3-4's prompt hash — never the
@@ -659,10 +652,12 @@ internal static class M3TestHarness
             .Where(row => row.Action == action)
             .OrderBy(row => row.Id)
             .ToListAsync();
-        return rows
-            .Where(row => (row.MetadataJson ?? string.Empty)
-                .Contains(marker, StringComparison.Ordinal))
-            .ToList();
+        return
+        [
+            .. rows
+                .Where(row => (row.MetadataJson ?? string.Empty)
+                    .Contains(marker, StringComparison.Ordinal))
+        ];
     }
 
     /// <summary>

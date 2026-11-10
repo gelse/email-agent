@@ -131,7 +131,7 @@ internal static class AdminTestHost
         var issuer = scope.ServiceProvider.GetRequiredService<IJwtTokenIssuer>();
         var db = scope.ServiceProvider.GetRequiredService<EmailAgentDbContext>();
         var user = await db.Users.AsNoTracking().SingleAsync(u => u.Id == userId);
-        return issuer.IssueAccessToken(user, new[] { role });
+        return issuer.IssueAccessToken(user, [role]);
     }
 
     public static HttpRequestMessage Request(
@@ -172,12 +172,8 @@ internal static class AdminTestHost
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class AdminUserEndpointsTests
+public class AdminUserEndpointsTests(PostgresFixture postgres)
 {
-    private readonly PostgresFixture _postgres;
-
-    public AdminUserEndpointsTests(PostgresFixture postgres) => _postgres = postgres;
-
     private static string UniqueEmail(string prefix)
         => $"m1t7-{prefix}-{Guid.NewGuid():N}@example.test";
 
@@ -207,7 +203,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task List_RequiresAdminRole_NonAdminGets403()
     {
-        var (factory, client, adminId, adminBearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, adminId, adminBearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -248,7 +244,7 @@ public class AdminUserEndpointsTests
         // Review WARNING: a still-valid JWT must not keep admin powers for a
         // Disabled account — least of all OTP reissue, which mints a fresh
         // login credential. Parity with the M1T6 account-endpoint gate.
-        var connectionString = await AccountTestHost.MigrateAsync(_postgres);
+        var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
         using var httpClient = AccountTestHost.CreateClient(factory);
         await AdminTestHost.EnsureRolesAsync(factory);
@@ -287,7 +283,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task List_DefaultLimit_25_And_ReturnsPagedShape()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -320,7 +316,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task List_Cursor_Advances_AcrossPages()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -386,7 +382,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task List_FilterByEmail_ReturnsOnlyMatching()
     {
-        var (factory, client, adminId, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, adminId, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -417,7 +413,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task List_FilterByRole_ReturnsOnlyAdmins()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -438,7 +434,7 @@ public class AdminUserEndpointsTests
         var ids = items.EnumerateArray()
             .Select(element => Guid.Parse(element.GetProperty("id").GetString()!))
             .ToList();
-        ids.Should().Contain(new[] { adminOne, adminTwo });
+        ids.Should().Contain([adminOne, adminTwo]);
         ids.Should().NotContain(plain);
 
         foreach (var element in items.EnumerateArray())
@@ -450,7 +446,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task List_LimitOutOfRange_Returns400()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -471,7 +467,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task List_InvalidCursor_Returns400()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -489,7 +485,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task Get_ExistingUser_ReturnsSummary()
     {
-        var (factory, client, adminId, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, adminId, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -529,7 +525,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task Get_Missing_Returns404()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -543,7 +539,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task Create_HappyPath_ReturnsOtpInResponse_AndMarksUserPending()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -594,7 +590,7 @@ public class AdminUserEndpointsTests
         // DB row is Pending / must_change_password with a hashed otp_hash and
         // expires_at ≈ now + 7d; later calls never re-return that OTP and no
         // audit row ever contains it.
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -637,7 +633,7 @@ public class AdminUserEndpointsTests
         var rows = await AccountTestHost.AuditRowsAsync(factory, userId);
         rows.Where(row => row.TargetId == userId.ToString())
             .Select(row => row.Action)
-            .Should().Contain(new[] { AuditActions.AdminCreateUser, AuditActions.AdminOtpIssued })
+            .Should().Contain([AuditActions.AdminCreateUser, AuditActions.AdminOtpIssued])
             .And.ContainSingle(action => action == AuditActions.AdminCreateUser);
         rows.Should().OnlyContain(row => row.Hmac != null && row.Hmac.Length == 32);
 
@@ -684,7 +680,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task Create_DuplicateEmail_Returns409()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -708,7 +704,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task Create_ByAdmin_AllowsAdminRole_TargetUserIsAdmin()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -738,7 +734,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task Reissue_HappyPath_ReturnsNewOtp_AndRevokesPriorUnused()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -781,7 +777,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task Reissue_DisabledUser_Returns400()
     {
-        var (factory, client, _, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, _, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 
@@ -798,7 +794,7 @@ public class AdminUserEndpointsTests
     [Fact]
     public async Task Create_And_Reissue_AreAudited()
     {
-        var (factory, client, adminId, bearer) = await CreateAdminHostAsync(_postgres);
+        var (factory, client, adminId, bearer) = await CreateAdminHostAsync(postgres);
         await using var disposableFactory = factory;
         using var httpClient = client;
 

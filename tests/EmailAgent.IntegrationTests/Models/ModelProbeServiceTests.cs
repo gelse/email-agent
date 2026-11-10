@@ -34,7 +34,8 @@ namespace EmailAgent.IntegrationTests.Models;
 /// </remarks>
 [Trait("Category", "M3T2")]
 [Collection("Postgres")]
-public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
+public class ModelProbeServiceTests(OpenAIMockFixture fixture, PostgresFixture postgres)
+    : IClassFixture<OpenAIMockFixture>, IAsyncLifetime
 {
     /// <summary>Throwaway integration-test HMAC key (same literal family as ApiTestFactory — never a real secret).</summary>
     private const string AuditHmacKey = "m1t4-integration-test-audit-hmac-key-0123456789";
@@ -52,15 +53,6 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     private static readonly SemaphoreSlim MigrationGate = new(1, 1);
     private static string? _migratedConnectionString;
 
-    private readonly OpenAIMockFixture _fixture;
-    private readonly PostgresFixture _postgres;
-
-    public ModelProbeServiceTests(OpenAIMockFixture fixture, PostgresFixture postgres)
-    {
-        _fixture = fixture;
-        _postgres = postgres;
-    }
-
     // -----------------------------------------------------------------------
     // Pass path (probe-pass scenario).
     // -----------------------------------------------------------------------
@@ -70,11 +62,11 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var connectionString = await MigrateAsync();
         await using var db = CreateDb(connectionString);
-        await _fixture.SetScenarioAsync("probe-pass");
+        await fixture.SetScenarioAsync("probe-pass");
         var modelName = UniqueModel();
-        var engine = new OpenAICompatibleAgentEngine(_fixture.Client);
+        var engine = new OpenAICompatibleAgentEngine(fixture.Client);
         var service = CreateService(db, engine);
-        var config = ConfigFor(_fixture.BaseUrl, modelName);
+        var config = ConfigFor(fixture.BaseUrl, modelName);
         var before = TotalRequests();
 
         var result = await service.ProbeAsync(config, null, CancellationToken.None);
@@ -98,11 +90,11 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var connectionString = await MigrateAsync();
         await using var db = CreateDb(connectionString);
-        await _fixture.SetScenarioAsync("probe-pass");
+        await fixture.SetScenarioAsync("probe-pass");
         var modelName = UniqueModel();
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
 
-        var result = await service.ProbeAsync(ConfigFor(_fixture.BaseUrl, modelName), null, CancellationToken.None);
+        var result = await service.ProbeAsync(ConfigFor(fixture.BaseUrl, modelName), null, CancellationToken.None);
 
         result.Outcome.Should().Be(ProbeOutcome.Pass);
         Mentioning(await ProbeFailRowsAsync(db), modelName).Should().BeEmpty(
@@ -118,12 +110,12 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var connectionString = await MigrateAsync();
         await using var db = CreateDb(connectionString);
-        await _fixture.SetScenarioAsync("probe-fail");
+        await fixture.SetScenarioAsync("probe-fail");
         var modelName = UniqueModel();
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
         var before = TotalRequests();
 
-        var result = await service.ProbeAsync(ConfigFor(_fixture.BaseUrl, modelName), null, CancellationToken.None);
+        var result = await service.ProbeAsync(ConfigFor(fixture.BaseUrl, modelName), null, CancellationToken.None);
 
         result.Outcome.Should().Be(ProbeOutcome.Fail);
         result.Reason.Should().Be("no_tool_calls");
@@ -147,17 +139,17 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var connectionString = await MigrateAsync();
         await using var db = CreateDb(connectionString);
-        await _fixture.SetScenarioAsync("probe-fail");
+        await fixture.SetScenarioAsync("probe-fail");
         var modelName = UniqueModel();
 
         // PATCH path: the catalog row exists, so the fail row correlates to it.
         var userId = await SeedUserAsync(db);
         var modelId = await SeedCatalogAsync(
-            db, userId, _fixture.BaseUrl, modelName, result: null, probedAt: null);
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+            db, userId, fixture.BaseUrl, modelName, result: null, probedAt: null);
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
 
         var result = await service.ProbeAsync(
-            ConfigFor(_fixture.BaseUrl, modelName), modelId, CancellationToken.None);
+            ConfigFor(fixture.BaseUrl, modelName), modelId, CancellationToken.None);
 
         result.Outcome.Should().Be(ProbeOutcome.Fail);
 
@@ -174,7 +166,7 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
         row.ActorUserId.Should().BeNull("a probe failure is a system event (§6)");
 
         using var metadata = JsonDocument.Parse(row.MetadataJson!);
-        metadata.RootElement.GetProperty("base_url").GetString().Should().Be(_fixture.BaseUrl);
+        metadata.RootElement.GetProperty("base_url").GetString().Should().Be(fixture.BaseUrl);
         metadata.RootElement.GetProperty("model_name").GetString().Should().Be(modelName);
         metadata.RootElement.GetProperty("reason").GetString().Should().Be("no_tool_calls");
         metadata.RootElement.GetProperty("request_excerpt").GetString()
@@ -191,12 +183,12 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var connectionString = await MigrateAsync();
         await using var db = CreateDb(connectionString);
-        await _fixture.SetScenarioAsync("probe-fail");
+        await fixture.SetScenarioAsync("probe-fail");
         var modelName = UniqueModel();
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
 
         // POST path: no correlation id → target_id stays NULL (SQ-M3-11).
-        var result = await service.ProbeAsync(ConfigFor(_fixture.BaseUrl, modelName), null, CancellationToken.None);
+        var result = await service.ProbeAsync(ConfigFor(fixture.BaseUrl, modelName), null, CancellationToken.None);
 
         result.Outcome.Should().Be(ProbeOutcome.Fail);
 
@@ -231,16 +223,16 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var connectionString = await MigrateAsync();
         await using var db = CreateDb(connectionString);
-        await _fixture.SetScenarioAsync("probe-pass");
+        await fixture.SetScenarioAsync("probe-pass");
         var modelName = UniqueModel();
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
 
-        var result = await service.ProbeAsync(ConfigFor(_fixture.BaseUrl, modelName), null, CancellationToken.None);
+        var result = await service.ProbeAsync(ConfigFor(fixture.BaseUrl, modelName), null, CancellationToken.None);
 
         result.Outcome.Should().Be(ProbeOutcome.Pass, "the probe ran (no cache row for a fresh model_name)");
 
         // The mock captured the raw body of this probe's chat-completions call.
-        var wire = _fixture.LastRequestBody;
+        var wire = fixture.LastRequestBody;
         wire.Should().NotBeNull("the mock records the body of every request it receives");
 
         using var transmitted = JsonDocument.Parse(wire!);
@@ -269,12 +261,12 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
         var modelName = UniqueModel();
         var userId = await SeedUserAsync(db);
         await SeedCatalogAsync(
-            db, userId, _fixture.BaseUrl, modelName,
+            db, userId, fixture.BaseUrl, modelName,
             ToolCallingProbeResult.Pass, DateTimeOffset.UtcNow.AddMinutes(-30));
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
         var before = TotalRequests();
 
-        var result = await service.ProbeAsync(ConfigFor(_fixture.BaseUrl, modelName), null, CancellationToken.None);
+        var result = await service.ProbeAsync(ConfigFor(fixture.BaseUrl, modelName), null, CancellationToken.None);
 
         result.Outcome.Should().Be(ProbeOutcome.PassFromCache, "a within-window Pass row is honored");
         result.CachedFrom.Should().NotBeNull();
@@ -287,16 +279,16 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var connectionString = await MigrateAsync();
         await using var db = CreateDb(connectionString);
-        await _fixture.SetScenarioAsync("probe-pass");
+        await fixture.SetScenarioAsync("probe-pass");
         var modelName = UniqueModel();
         var userId = await SeedUserAsync(db);
         await SeedCatalogAsync(
-            db, userId, _fixture.BaseUrl, modelName,
+            db, userId, fixture.BaseUrl, modelName,
             ToolCallingProbeResult.Pass, DateTimeOffset.UtcNow.AddHours(-2));
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
         var before = TotalRequests();
 
-        var result = await service.ProbeAsync(ConfigFor(_fixture.BaseUrl, modelName), null, CancellationToken.None);
+        var result = await service.ProbeAsync(ConfigFor(fixture.BaseUrl, modelName), null, CancellationToken.None);
 
         result.Outcome.Should().Be(
             ProbeOutcome.Pass, "the 1-hour window lapsed (2 h old row) → the probe re-runs");
@@ -308,13 +300,13 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     {
         var connectionString = await MigrateAsync();
         await using var db = CreateDb(connectionString);
-        await _fixture.SetScenarioAsync("probe-pass");
+        await fixture.SetScenarioAsync("probe-pass");
         var modelName = UniqueModel();
         var userId = await SeedUserAsync(db);
         await SeedCatalogAsync(
-            db, userId, _fixture.BaseUrl, modelName,
+            db, userId, fixture.BaseUrl, modelName,
             ToolCallingProbeResult.Pass, DateTimeOffset.UtcNow.AddMinutes(-30));
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
         var before = TotalRequests();
 
         // Same model_name, different base_url → different cache key. The
@@ -337,11 +329,11 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
         var modelName = UniqueModel();
         var userId = await SeedUserAsync(db);
         await SeedCatalogAsync(
-            db, userId, _fixture.BaseUrl, modelName,
+            db, userId, fixture.BaseUrl, modelName,
             ToolCallingProbeResult.Pass, DateTimeOffset.UtcNow.AddMinutes(-30));
-        var service = CreateService(db, new OpenAICompatibleAgentEngine(_fixture.Client));
+        var service = CreateService(db, new OpenAICompatibleAgentEngine(fixture.Client));
 
-        var result = await service.ProbeAsync(ConfigFor(_fixture.BaseUrl, modelName), null, CancellationToken.None);
+        var result = await service.ProbeAsync(ConfigFor(fixture.BaseUrl, modelName), null, CancellationToken.None);
 
         result.Outcome.Should().Be(ProbeOutcome.PassFromCache);
         Mentioning(await ProbeFailRowsAsync(db), modelName).Should().BeEmpty(
@@ -369,7 +361,7 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     /// </summary>
     public async Task DisposeAsync()
     {
-        await using var db = CreateDb(_postgres.ConnectionString);
+        await using var db = CreateDb(postgres.ConnectionString);
         await db.ModelCatalog
             .Where(m => m.ModelName.StartsWith(MarkerPrefix))
             .ExecuteDeleteAsync();
@@ -395,7 +387,7 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
             () => engine);
 
     /// <summary>Engine round-trips against this fixture's mock, summed over scenarios (set at test start).</summary>
-    private int TotalRequests() => _fixture.RequestCounts.Values.Sum();
+    private int TotalRequests() => fixture.RequestCounts.Values.Sum();
 
     private static async Task<Guid> SeedUserAsync(EmailAgentDbContext db)
     {
@@ -455,8 +447,7 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
 
     /// <summary>Rows of this test's probe only — matched by the unique model_name marker.</summary>
     private static List<AuditLog> Mentioning(List<AuditLog> rows, string modelName) =>
-        rows.Where(r => (r.MetadataJson ?? string.Empty).Contains(modelName, StringComparison.Ordinal))
-            .ToList();
+        [.. rows.Where(r => (r.MetadataJson ?? string.Empty).Contains(modelName, StringComparison.Ordinal))];
 
     /// <summary>The SQ-M3-3 canonical request_excerpt for a model (byte-for-byte expectation).</summary>
     private static string CanonicalRequestExcerpt(string modelName) =>
@@ -515,7 +506,7 @@ public class ModelProbeServiceTests : IClassFixture<OpenAIMockFixture>, IAsyncLi
     /// <summary>Applies every migration once per shared Postgres container (InitialSchemaTests pattern).</summary>
     private async Task<string> MigrateAsync()
     {
-        var connectionString = _postgres.ConnectionString;
+        var connectionString = postgres.ConnectionString;
 
         await MigrationGate.WaitAsync();
         try

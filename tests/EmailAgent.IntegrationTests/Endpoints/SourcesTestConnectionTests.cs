@@ -18,17 +18,9 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
-public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
+public class SourcesTestConnectionTests(PostgresFixture postgres, GreenMailFixture greenmail)
+    : IClassFixture<GreenMailFixture>
 {
-    private readonly PostgresFixture _postgres;
-    private readonly GreenMailFixture _greenmail;
-
-    public SourcesTestConnectionTests(PostgresFixture postgres, GreenMailFixture greenmail)
-    {
-        _postgres = postgres;
-        _greenmail = greenmail;
-    }
-
     /// <summary>
     /// Milestone row "surfaced by /test-connection": HTTP 200 with
     /// <c>{ok:false, error:"…"}</c> — the failure is in the body, not the
@@ -37,12 +29,12 @@ public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Sources_TestConnection_BadPassword_ReturnsOkFalse_WithError()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
         using var response = await SendAsync(
-            host, _greenmail.CreateConfig(password: "definitely-not-the-password"));
+            host, greenmail.CreateConfig(password: "definitely-not-the-password"));
 
         response.StatusCode.Should().Be(HttpStatusCode.OK,
             "an authentication failure is a plugin outcome, not an HTTP error");
@@ -58,14 +50,14 @@ public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Sources_TestConnection_BadHost_ReturnsOkFalse_WithError()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
         // Nothing listens on port 1 of the loopback interface: the connect
         // fails before any IMAP or TLS traffic — the connection bucket.
         using var response = await SendAsync(
-            host, _greenmail.CreateConfig(host: "127.0.0.1", port: 1));
+            host, greenmail.CreateConfig(host: "127.0.0.1", port: 1));
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await AccountTestHost.ReadJsonAsync(response);
@@ -84,12 +76,12 @@ public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Sources_TestConnection_PortOutOfRange_ReturnsOkFalse_WithError()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
         using var response = await SendAsync(
-            host, _greenmail.CreateConfig(port: 99999));
+            host, greenmail.CreateConfig(port: 99999));
 
         response.Content.Headers.ContentType!.ToString()
             .Should().Contain("application/problem+json");
@@ -102,16 +94,16 @@ public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Sources_TestConnection_ValidConfigAgainstGreenmail_ReturnsOkTrue()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
-        using var response = await SendAsync(host, _greenmail.CreateConfig());
+        using var response = await SendAsync(host, greenmail.CreateConfig());
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await AccountTestHost.ReadJsonAsync(response);
         body.GetProperty("ok").GetBoolean().Should().BeTrue(
-            $"alice/alice is provisioned on {_greenmail.ImapHost}:{_greenmail.ImapPort} — got: "
+            $"alice/alice is provisioned on {greenmail.ImapHost}:{greenmail.ImapPort} — got: "
             + body.GetProperty("error").GetRawText());
         body.GetProperty("error").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
     }
@@ -119,7 +111,7 @@ public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Sources_TestConnection_UnknownPlugin_Returns400_BeforeAnySocket()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
@@ -128,7 +120,7 @@ public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
             new
             {
                 type_id = "carrier-pigeon",
-                config = _greenmail.CreateConfig(),
+                config = greenmail.CreateConfig(),
             }));
 
         (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.BadRequest))
@@ -139,17 +131,17 @@ public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Sources_TestConnection_WritesAuditRow_WithOkOutcome()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
         using (var failed = await SendAsync(
-                   host, _greenmail.CreateConfig(password: "wrong-again")))
+                   host, greenmail.CreateConfig(password: "wrong-again")))
         {
             failed.StatusCode.Should().Be(HttpStatusCode.OK);
         }
 
-        using (var succeeded = await SendAsync(host, _greenmail.CreateConfig()))
+        using (var succeeded = await SendAsync(host, greenmail.CreateConfig()))
         {
             succeeded.StatusCode.Should().Be(HttpStatusCode.OK);
         }
@@ -171,7 +163,7 @@ public class SourcesTestConnectionTests : IClassFixture<GreenMailFixture>
     [Fact]
     public async Task Sources_TestConnection_MissingBody_Returns400_Validation()
     {
-        var host = await SourcesTestHost.CreateUserAsync(_postgres);
+        var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
         using var client = host.Client;
 
