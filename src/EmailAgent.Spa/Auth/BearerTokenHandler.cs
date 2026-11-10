@@ -14,16 +14,8 @@ namespace EmailAgent.Spa.Auth;
 /// unwrap-dek passphrase, a login password) is never refreshed or retried —
 /// while a JwtBearer challenge for an expired token still is.
 /// </summary>
-public sealed class BearerTokenHandler : DelegatingHandler
+public sealed class BearerTokenHandler(TokenStore tokenStore, RefreshCookieAuthenticator authenticator) : DelegatingHandler
 {
-    private readonly TokenStore _tokenStore;
-    private readonly RefreshCookieAuthenticator _authenticator;
-
-    public BearerTokenHandler(TokenStore tokenStore, RefreshCookieAuthenticator authenticator)
-    {
-        _tokenStore = tokenStore ?? throw new ArgumentNullException(nameof(tokenStore));
-        _authenticator = authenticator ?? throw new ArgumentNullException(nameof(authenticator));
-    }
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
@@ -42,7 +34,7 @@ public sealed class BearerTokenHandler : DelegatingHandler
 
         if (response.StatusCode != HttpStatusCode.Unauthorized
             || !allowRefreshRetry
-            || _tokenStore.AccessToken is null)
+            || tokenStore.AccessToken is null)
         {
             return response;
         }
@@ -67,7 +59,7 @@ public sealed class BearerTokenHandler : DelegatingHandler
         // Stale/expired access token: one silent refresh (cookie flow), then
         // retry this request exactly once with the new token. A 401 on the
         // retried copy is returned as-is (no refresh loop).
-        if (!await _authenticator.AttemptSilentRefreshAsync(ct).ConfigureAwait(false))
+        if (!await authenticator.AttemptSilentRefreshAsync(ct).ConfigureAwait(false))
         {
             return response;
         }
@@ -80,7 +72,7 @@ public sealed class BearerTokenHandler : DelegatingHandler
 
     private void AttachBearer(HttpRequestMessage request)
     {
-        var token = _tokenStore.AccessToken;
+        var token = tokenStore.AccessToken;
         if (!string.IsNullOrWhiteSpace(token))
         {
             request.Headers.Authorization =
