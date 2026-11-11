@@ -21,10 +21,12 @@ namespace EmailAgent.Api.Endpoints;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The M2 sources endpoints need the caller's data-encryption key in the
-/// <c>X-User-Dek</c> header (SQ-M2-1 / §13.16). <c>GET /kdf</c> returns the
-/// account's Argon2id salt and parameters for the signed-in caller only: no
-/// wrapped DEK, no nonce, no other account's material.
+/// The M2 sources endpoints <b>used to</b> need the caller's data-encryption
+/// key in the <c>X-User-Dek</c> header (SQ-M2-1 / §13.16) — that transport was
+/// removed in M5T1 (§13.17 / Q-E9), so these routes no longer carry a DEK
+/// header of any kind. <c>GET /kdf</c> returns the account's Argon2id salt and
+/// parameters for the signed-in caller only: no wrapped DEK, no nonce, no
+/// other account's material.
 /// </para>
 /// <para>
 /// As of M2T6 the SPA does <b>not</b> derive the KEK in the browser: it posts
@@ -149,10 +151,11 @@ public static class UserAccountEndpoints
     /// <para>
     /// The server derives the KEK and unwraps the caller's own wrapped DEK
     /// (<see cref="IEncryptionService.UnwrapDek"/>) — M2-only (SQ-12/Q-E9);
-    /// M5T1's §13.17 in-browser derivation supersedes this endpoint later, and
-    /// the M2T6 task file records that supersession. The SPA caches the result
-    /// in memory and sends it as <c>X-User-Dek</c>; it is never persisted in
-    /// the browser, and neither this handler nor any logger ever records the
+    /// M5T1's §13.17 in-browser derivation supersedes this endpoint, and the
+    /// M2T6 task file records that supersession. The M2 SPA cached the result
+    /// in memory and sent it as the <c>X-User-Dek</c> header — removed with
+    /// that transport in M5T1 — and it was never persisted in the browser;
+    /// neither this handler nor any logger ever records the
     /// passphrase, the KEK or the DEK. The success body carries
     /// <c>Cache-Control: no-store</c> and the plaintext byte buffer is zeroed
     /// once encoded (review fixes).

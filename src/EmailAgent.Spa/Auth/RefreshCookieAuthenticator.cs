@@ -27,10 +27,10 @@ public sealed class RefreshCookieAuthenticator(IHttpClientFactory clientFactory,
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
-    /// M2T6 review fix (round 2): claim reader used to decide whether the
-    /// refreshed token belongs to the session that is holding a DEK. Stateless
-    /// and unverified by design (same rule as routing: the API verifies, the
-    /// SPA only compares subjects).
+    /// M2T6 review fix (round 2), carried into M5T1: claim reader used to
+    /// decide whether the refreshed token belongs to the session that holds
+    /// the vault unlock. Stateless and unverified by design (same rule as
+    /// routing: the API verifies, the SPA only compares subjects).
     /// </summary>
     private readonly JwtRoleParser _claims = new();
 
@@ -66,18 +66,19 @@ public sealed class RefreshCookieAuthenticator(IHttpClientFactory clientFactory,
 
             // The ea_refresh cookie is shared by every tab of the browser: a
             // sign-in as another account elsewhere can make THIS tab's refresh
-            // return that account's token. Storing it with the key the current
-            // session still caches would pair one user's DEK with another
-            // user's requests (a config wrapped under a key nobody can re-open
-            // — no re-wrap path exists in M2). A different subject therefore
-            // goes through SignIn, which drops the cached key first.
+            // return that account's token. Storing it while keeping the
+            // current session's crypto-session token would pair one user's
+            // vault unlock with another user's requests (the session is keyed
+            // by user, so it would never resolve — but the SPA must not pretend
+            // otherwise). A different subject therefore goes through SignIn,
+            // which drops the unlock first.
             //
             // M2T6 review fix (round 3): the comparison fails CLOSED. Keeping
-            // the key is only allowed when BOTH subjects parsed and matched —
-            // an unparseable subject (contract drift, malformed payload) is
+            // the unlock is only allowed when BOTH subjects parsed and matched
+            // — an unparseable subject (contract drift, malformed payload) is
             // treated as "not provably the same principal". A false drop costs
-            // one passphrase re-prompt; a false keep risks a source wrapped
-            // under a foreign key.
+            // one passphrase re-prompt; a false keep risks presenting a session
+            // token alongside a foreign principal.
             var previous = tokenStore.AccessToken;
             var previousSubject = previous is null ? null : _claims.GetSubject(previous);
             var nextSubject = _claims.GetSubject(body.AccessToken);

@@ -11,9 +11,9 @@ using SourcesPage = EmailAgent.Spa.Pages.User.Sources;
 namespace EmailAgent.UnitTests.Spa;
 
 /// <summary>
-/// M2T6 bUnit coverage for the /user/sources page (task test list): the R2
-/// DEK gate, the empty and table states, the add-dialog handoff, the
-/// milestone-pinned
+/// M2T6 bUnit coverage for the /user/sources page (task test list): the
+/// unlock gate (M2's DEK gate, M5T1's crypto-session gate), the empty and
+/// table states, the add-dialog handoff, the milestone-pinned
 /// <c>SourcesPage_TestConnection_BadPassword_ShowsInlineError</c> row test
 /// (deviation option 3), fetch-now's info toast, the delete-confirm flow, the
 /// defense-in-depth cross-user assertion and the 403-inline path — all over
@@ -22,9 +22,6 @@ namespace EmailAgent.UnitTests.Spa;
 /// </summary>
 public class SourcesPageTests
 {
-    /// <summary>Base64 of 32 bytes — the wire form of X-User-Dek.</summary>
-    private const string Dek = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
-
     private static readonly Guid SourceId = new("44444444-4444-4444-4444-444444444444");
 
     private const string EmptyListJson = """{"items":[],"next_cursor":null}""";
@@ -90,7 +87,7 @@ public class SourcesPageTests
     }
 
     [Fact]
-    public void SourcesPage_WithoutDek_ShowsPrompt_AndHidesTable()
+    public void SourcesPage_WithoutSession_ShowsPrompt_AndHidesTable()
     {
         using var ctx = new SpaTestContext();
         ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
@@ -98,17 +95,17 @@ public class SourcesPageTests
         var cut = ctx.RenderComponent<SourcesPage>();
 
         cut.WaitForAssertion(() => cut.Find("#unlock-submit").Should().NotBeNull(
-            "an empty DekStore presents the R2 passphrase prompt"));
-        cut.Markup.Should().Contain("Unlock encrypted sources");
+            "an empty crypto-session slot presents the unlock prompt"));
+        cut.Markup.Should().Contain("Unlock encrypted data");
         cut.FindAll("#sources-table").Should().BeEmpty(
             "the table stays out of the markup entirely until the session is unlocked");
         cut.FindAll("#sources-empty").Should().BeEmpty();
         ctx.Handler.Requests.Should().BeEmpty(
-            "no list request is made before the DEK is cached");
+            "no list request is made before the unlock session exists");
     }
 
     [Fact]
-    public void SourcesPage_WithDek_SkipsPrompt()
+    public void SourcesPage_WithSession_SkipsPrompt()
     {
         using var ctx = UnlockedContext(RowJson);
 
@@ -116,7 +113,7 @@ public class SourcesPageTests
         cut.WaitForAssertion(() => cut.Markup.Should().Contain("work imap"));
 
         cut.FindAll("#unlock-submit").Should().BeEmpty(
-            "a cached DEK unlocks the page without re-prompting");
+            "a cached session token unlocks the page without re-prompting");
     }
 
     [Fact]
@@ -189,7 +186,7 @@ public class SourcesPageTests
     {
         using var ctx = new SpaTestContext();
         ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
-        ctx.Store.DekStore.SetDek(Dek);
+        ctx.Store.CryptoSession.SetToken(SpaTestContext.CryptoSessionToken);
         ctx.Handler.Responder = (request, _) =>
             request.Method == HttpMethod.Post
             && request.RequestUri!.AbsolutePath == "/v1/user/sources/test-connection"
@@ -264,7 +261,7 @@ public class SourcesPageTests
     {
         using var ctx = new SpaTestContext();
         ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
-        ctx.Store.DekStore.SetDek(Dek);
+        ctx.Store.CryptoSession.SetToken(SpaTestContext.CryptoSessionToken);
         var deleted = false;
         ctx.Handler.Responder = (request, _) =>
         {
@@ -324,9 +321,10 @@ public class SourcesPageTests
     }
 
     /// <summary>
-    /// M2T6 review fix: a <c>/errors/dek-invalid</c> answer means the cached
-    /// key cannot open this account's blobs — the page drops it and falls
-    /// back to the unlock prompt instead of a dead end.
+    /// M2T6 review fix, carried into M5T1: a <c>/errors/dek-invalid</c> answer
+    /// means the session's key cannot open this account's blobs — the page
+    /// drops the session token and falls back to the unlock prompt instead of
+    /// a dead end.
     /// </summary>
     [Fact]
     public void SourcesPage_DekInvalid_DropsKey_AndRePrompts()
@@ -334,7 +332,7 @@ public class SourcesPageTests
         using var ctx = UnlockedContext();
         ctx.Handler.Responder = (_, _) => Task.FromResult(SpaTestContext.Json(
             """
-            {"type":"/errors/dek-invalid","title":"Bad Request","status":400,"detail":"the X-User-Dek header does not decrypt this source's config blob."}
+            {"type":"/errors/dek-invalid","title":"Bad Request","status":400,"detail":"the stored DEK does not decrypt this source's config blob."}
             """,
             HttpStatusCode.BadRequest));
 
@@ -354,56 +352,58 @@ public class SourcesPageTests
             "Enter your passphrase again",
             "a re-prompt with no explanation reads as a silent logout");
 
-        ctx.Store.DekStore.IsEmpty.Should().BeTrue(
-            "the key that failed is dropped from memory");
+        ctx.Store.CryptoSession.IsEmpty.Should().BeTrue(
+            "the session token that failed is dropped from memory");
     }
 
     /// <summary>
-    /// Round 4 (NIT): the SECOND arm of <c>IsDekRejected</c> — the
-    /// <c>/errors/validation</c> problem naming <c>x-user-dek</c>, which is
-    /// what a request that went out without a usable key receives. Same
-    /// outcome as <c>/errors/dek-invalid</c>: re-lock with the banner.
+    /// M5T1: the session gate's own verdict — 403 <c>/errors/crypto-locked</c>
+    /// for a missing/expired/revoked <c>X-Crypto-Session</c> — re-locks with
+    /// the same banner as a rejected key. (The M2T6 round-4
+    /// <c>/errors/validation</c> arm naming <c>x-user-dek</c> retired with the
+    /// header.)
     /// </summary>
     [Fact]
-    public void SourcesPage_MissingDekHeaderValidation_ReLocksLikeDekInvalid()
+    public void SourcesPage_CryptoLocked_ReLocks()
     {
         using var ctx = UnlockedContext();
         ctx.Handler.Responder = (_, _) => Task.FromResult(SpaTestContext.Json(
             """
-            {"type":"/errors/validation","title":"Bad Request","status":400,"detail":"The request is invalid.","errors":[{"name":"x-user-dek","reason":"the X-User-Dek header is required (M2-only transport; M5 replaces it)."}]}
+            {"type":"/errors/crypto-locked","title":"Forbidden","status":403,"detail":"No active crypto session."}
             """,
-            HttpStatusCode.BadRequest));
+            HttpStatusCode.Forbidden));
 
         var cut = ctx.RenderComponent<SourcesPage>();
 
         cut.WaitForAssertion(() => cut.Find("#unlock-submit").Should().NotBeNull(
-            "a keyless request re-locks instead of leaving an inline dead end"));
+            "an expired or revoked session re-locks instead of leaving an inline dead end"));
         cut.Find("#sources-error").TextContent.Should().Contain("Enter your passphrase again");
         cut.FindAll("#sources-table").Should().BeEmpty();
         cut.FindAll("#sources-empty").Should().BeEmpty(
             "no empty state next to a failure — the first page never arrived");
-        ctx.Store.DekStore.IsEmpty.Should().BeTrue();
+        ctx.Store.CryptoSession.IsEmpty.Should().BeTrue(
+            "the rejected session token is cleared");
     }
 
     /// <summary>
-    /// M2T6 review fix (round 3, WARNING): the store is the source of truth
-    /// for the DEK gate. A sign-in elsewhere in the browser clears the shared
-    /// <c>DekStore</c> while this page still renders as unlocked — the next
-    /// action must re-lock with a banner instead of firing requests that go
-    /// out without <c>X-User-Dek</c> (a permanent error state until an F5).
+    /// M2T6 review fix (round 3, WARNING), carried into M5T1: the store is
+    /// the source of truth for the unlock gate. A sign-in elsewhere in the
+    /// browser clears the shared <c>CryptoSession</c> while this page still
+    /// renders as unlocked — the next action must re-lock with a banner
+    /// instead of firing requests that go out with a stale session token.
     /// </summary>
     [Fact]
-    public void SourcesPage_SignInElsewhere_EmptiedDek_RelocksOnNextAction()
+    public void SourcesPage_SignInElsewhere_EmptiedSession_RelocksOnNextAction()
     {
         using var ctx = UnlockedContext(RowJson);
 
         var cut = ctx.RenderComponent<SourcesPage>();
         cut.WaitForAssertion(() => cut.Markup.Should().Contain("work imap"));
 
-        // Another tab signs in: TokenStore.SignIn drops the cached DEK while
-        // THIS page still holds _unlocked = true.
+        // Another tab signs in: TokenStore.SignIn drops the cached session
+        // token while THIS page still holds _unlocked = true.
         ctx.Store.SignIn(SpaTestContext.FakeJwt(role: "User"));
-        ctx.Store.DekStore.IsEmpty.Should().BeTrue();
+        ctx.Store.CryptoSession.IsEmpty.Should().BeTrue();
 
         cut.Find("#sources-reload").Click();
 
@@ -465,12 +465,12 @@ public class SourcesPageTests
     // Helpers
     // -----------------------------------------------------------------
 
-    /// <summary>An unlocked (token + DEK) context whose list endpoint answers <paramref name="listJson"/>.</summary>
+    /// <summary>An unlocked (token + session) context whose list endpoint answers <paramref name="listJson"/>.</summary>
     private static SpaTestContext UnlockedContext(string listJson = EmptyListJson)
     {
         var ctx = new SpaTestContext();
         ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
-        ctx.Store.DekStore.SetDek(Dek);
+        ctx.Store.CryptoSession.SetToken(SpaTestContext.CryptoSessionToken);
         ctx.Handler.Responder = (_, _) => Task.FromResult(SpaTestContext.Json(listJson));
         return ctx;
     }

@@ -2,10 +2,12 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using EmailAgent.Api.Auth;
 using EmailAgent.Api.Errors;
 using EmailAgent.Api.Pagination;
 using EmailAgent.Api.Sources;
 using EmailAgent.Core.Identity;
+using EmailAgent.Core.Security;
 using EmailAgent.Infrastructure.Entities;
 using EmailAgent.Infrastructure.Enums;
 using FluentValidation;
@@ -17,7 +19,8 @@ namespace EmailAgent.Api.Endpoints;
 // ---------------------------------------------------------------------------
 // M2T5: the HTTP half of /v1/user/sources. Each handler
 //   1. resolves the actor (401/403 parity with the admin/account namespaces),
-//   2. reads the M2-only X-User-Dek header where the operation must decrypt,
+//   2. resolves the caller's DEK from the M5 crypto-session accessor (the
+//      X-User-Dek header of §13.16 is gone — M5T1 is the removal point),
 //   3. validates the request SHAPE (§14 → 400 /errors/validation), and
 //   4. calls SourceService, translating its typed failures (SourceExceptions.cs)
 //      into §13.12 RFC 7807 documents.
@@ -29,15 +32,7 @@ namespace EmailAgent.Api.Endpoints;
 /// <summary>Route handlers for <see cref="SourcesEndpoints"/> (task step 6/7).</summary>
 public static class SourcesHandlers
 {
-    /// <summary>
-    /// M2-only DEK transport (task Risks SQ-M2-1 / §13.16): the SPA unwraps
-    /// the per-user data-encryption key and sends it per request. M5 replaces
-    /// the header with the session-key envelope and deletes this constant's
-    /// only call sites.
-    /// </summary>
-    public const string DekHeaderName = "X-User-Dek";
-
-    /// <summary>The 32-byte AES-256 key length every DEK header must decode to.</summary>
+    /// <summary>The 32-byte AES-256 key length every resolved DEK has.</summary>
     private const int DekByteLength = 32;
 
     /// <summary>
@@ -50,6 +45,7 @@ public static class SourcesHandlers
         HttpContext ctx,
         SourceService service,
         UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession,
         CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActorAsync(ctx, userManager, ct);
@@ -58,7 +54,7 @@ public static class SourcesHandlers
             return actorError;
         }
 
-        var (dek, dekError) = ReadDek(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null)
         {
             return dekError;
@@ -123,6 +119,7 @@ public static class SourcesHandlers
         HttpContext ctx,
         SourceService service,
         UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession,
         CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActorAsync(ctx, userManager, ct);
@@ -131,7 +128,7 @@ public static class SourcesHandlers
             return actorError;
         }
 
-        var (dek, dekError) = ReadDek(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null)
         {
             return dekError;
@@ -184,6 +181,7 @@ public static class SourcesHandlers
         Guid id,
         SourceService service,
         UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession,
         CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActorAsync(ctx, userManager, ct);
@@ -192,7 +190,7 @@ public static class SourcesHandlers
             return actorError;
         }
 
-        var (dek, dekError) = ReadDek(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null)
         {
             return dekError;
@@ -223,6 +221,7 @@ public static class SourcesHandlers
         Guid id,
         SourceService service,
         UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession,
         CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActorAsync(ctx, userManager, ct);
@@ -231,7 +230,7 @@ public static class SourcesHandlers
             return actorError;
         }
 
-        var (dek, dekError) = ReadDek(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null)
         {
             return dekError;
@@ -274,8 +273,9 @@ public static class SourcesHandlers
 
     /// <summary>
     /// <c>DELETE /v1/user/sources/{id}</c> — source row, config blob and
-    /// <c>delete_source</c> audit row in one transaction (SQ-7). No DEK header:
-    /// nothing is decrypted, so no key material is handled. A source that still
+    /// <c>delete_source</c> audit row in one transaction (SQ-7). No DEK is
+    /// needed — nothing is decrypted, so no key material is handled (the
+    /// crypto-session guard still gates the route). A source that still
     /// owns <c>processed_messages</c> rows is a 409 (Q-O15 keeps them and the
     /// FK is RESTRICT — see <see cref="SourceHasMessagesException"/>).
     /// </summary>
@@ -309,7 +309,7 @@ public static class SourcesHandlers
     /// outcome the SPA renders inline (milestone row), while a failure the API
     /// itself can prove (unknown plugin, schema violation such as
     /// <c>port=99999</c>) is a §13.12 400 raised BEFORE any socket is opened
-    /// (task Risks). No DEK header: nothing is stored or read.
+    /// (task Risks). No DEK is needed: nothing is stored or read.
     /// </summary>
     internal static async Task<IResult> TestConnection(
         HttpContext ctx,
@@ -363,6 +363,7 @@ public static class SourcesHandlers
         Guid id,
         SourceService service,
         UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession,
         CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActorAsync(ctx, userManager, ct);
@@ -371,7 +372,7 @@ public static class SourcesHandlers
             return actorError;
         }
 
-        var (dek, dekError) = ReadDek(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null)
         {
             return dekError;
@@ -442,50 +443,41 @@ public static class SourcesHandlers
     }
 
     /// <summary>
-    /// Reads and decodes <c>X-User-Dek</c>. A missing, non-base64 or
-    /// wrong-length value is a §13.12 400 whose <c>errors[0].name</c> is
-    /// <c>x-user-dek</c> — never a 500 from an AES-GCM length check.
+    /// Resolves the caller's DEK from the crypto session (M5T1 — the
+    /// <c>X-User-Dek</c> header of §13.16 is removed). The namespace guard
+    /// (<see cref="CryptoSessionMiddleware"/>) has already refused a locked
+    /// session with 403 <c>/errors/crypto-locked</c> before any handler runs,
+    /// so a non-<c>Ok</c> result here is belt-and-braces for direct handler
+    /// invocation — it maps to the same 403 document, never to a 500 from an
+    /// AES-GCM length check.
     /// </summary>
-    private static (byte[]? Dek, IResult? Error) ReadDek(HttpContext ctx)
+    private static (byte[]? Dek, IResult? Error) ReadDek(
+        HttpContext ctx, ICryptoSessionAccessor cryptoSession)
     {
-        var header = ctx.Request.Headers[DekHeaderName].ToString();
-        if (string.IsNullOrWhiteSpace(header))
+        var result = cryptoSession.TryGetDek();
+        if (!result.IsOk || result.Dek is null)
         {
-            return (null, DekProblem(
-                ctx,
-                $"the {DekHeaderName} header is required (M2-only transport; M5 replaces it "
-                + "with the session-key envelope)."));
+            return (null, CryptoLockedProblem(ctx));
         }
 
-        byte[] dek;
-        try
+        if (result.Dek.Length != DekByteLength)
         {
-            dek = Convert.FromBase64String(header.Trim());
-        }
-        catch (FormatException)
-        {
-            return (null, DekProblem(ctx, $"the {DekHeaderName} header must be base64."));
+            Zero(result.Dek);
+            return (null, CryptoLockedProblem(ctx));
         }
 
-        if (dek.Length != DekByteLength)
-        {
-            Zero(dek);
-            return (null, DekProblem(
-                ctx,
-                $"the {DekHeaderName} header must decode to {DekByteLength} bytes."));
-        }
-
-        return (dek, null);
+        return (result.Dek, null);
     }
 
-    private static IResult DekProblem(HttpContext ctx, string reason)
+    /// <summary>403 <c>/errors/crypto-locked</c> — the vault must be unlocked again (SQ-M5-1).</summary>
+    private static IResult CryptoLockedProblem(HttpContext ctx)
         => Problem(
             ctx,
-            StatusCodes.Status400BadRequest,
-            SourceErrors.Types.Validation,
-            "Validation failed",
-            "A request header is invalid.",
-            new[] { ("x-user-dek", reason) });
+            StatusCodes.Status403Forbidden,
+            CryptoSessionMiddleware.CryptoLockedErrorType,
+            "Crypto session locked",
+            "The data-encryption vault for this session is locked or expired. "
+            + "Unlock with the account passphrase and retry.");
 
     private static IResult BodyRequired(HttpContext ctx)
         => Problem(
@@ -588,8 +580,8 @@ public static class SourcesHandlers
                 StatusCodes.Status400BadRequest,
                 SourceErrors.Types.DekInvalid,
                 "Invalid data-encryption key",
-                "The supplied data-encryption key does not open this source's configuration. "
-                + "Send the key belonging to the signed-in account."),
+                "The session's data-encryption key does not open this source's configuration. "
+                + "Unlock again with your passphrase and retry."),
 
             SourceHasMessagesException ex => Problem(
                 ctx,

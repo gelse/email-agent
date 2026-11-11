@@ -140,7 +140,7 @@ public class EditSourceDialogTests
     {
         using var ctx = new SpaTestContext();
         ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
-        ctx.Store.DekStore.SetDek("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+        ctx.Store.CryptoSession.SetToken(SpaTestContext.CryptoSessionToken);
 
         var created = false;
         ctx.Handler.Responder = (request, _) =>

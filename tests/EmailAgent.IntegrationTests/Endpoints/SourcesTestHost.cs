@@ -13,28 +13,30 @@ using Microsoft.Extensions.DependencyInjection;
 namespace EmailAgent.IntegrationTests.Endpoints;
 
 // ---------------------------------------------------------------------------
-// M2T5 shared harness for the /v1/user/sources suites: one user (and one
-// DEK) per test, a request builder that carries the M2-only X-User-Dek
-// header, and small DbContext readers for the rows the endpoint contracts
-// pin (message_sources, encrypted_blobs, processed_messages). Users are
-// seeded directly and tokens minted by the real issuer with an explicit
-// "User" role claim (AdminTestHost.BearerAsync) — no login path, so no
-// login rate-limit budget is spent (rate limiting is 60/min PER USER and
-// each test gets its own).
+// M2T5 shared harness for the /v1/user/sources suites, migrated by M5T1 to
+// the session-key envelope: one user (and one DEK) per test, a request builder
+// that carries the X-Crypto-Session header minted by POST /v1/account/unlock
+// (the DEK never rides the wire again), and small DbContext readers for the
+// rows the endpoint contracts pin (message_sources, encrypted_blobs,
+// processed_messages). Users are seeded directly and tokens minted by the
+// real issuer with an explicit "User" role claim (AdminTestHost.BearerAsync)
+// — no login path, so no login rate-limit budget is spent (rate limiting is
+// 60/min PER USER and each test gets its own).
 // ---------------------------------------------------------------------------
 
-/// <summary>One test caller: factory-hosted API, client, identity and DEK.</summary>
+/// <summary>One test caller: factory-hosted API, client, identity, DEK and crypto-session token.</summary>
 internal sealed record SourcesHost(
     WebApplicationFactory<Program> Factory,
     HttpClient Client,
     Guid UserId,
     string Bearer,
-    string Dek);
+    string Dek,
+    string Session);
 
 internal static class SourcesTestHost
 {
-    /// <summary>The M2-only DEK header the sources namespace reads.</summary>
-    public const string DekHeaderName = "X-User-Dek";
+    /// <summary>The session-key envelope header every /v1/user/* route is judged on (server: HttpCryptoSessionAccessor.HeaderName).</summary>
+    public const string SessionHeaderName = "X-Crypto-Session";
 
     public const string ImapTypeId = "imap";
 
@@ -44,29 +46,42 @@ internal static class SourcesTestHost
     public static string UniqueEmail(string prefix = "m2t5")
         => $"{prefix}-{Guid.NewGuid():N}@example.test";
 
-    /// <summary>A fresh 32-byte DEK in the base64 form the header expects.</summary>
+    /// <summary>A fresh 32-byte DEK in the base64 form POST /v1/account/unlock expects.</summary>
     public static string NewDek() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
-    /// <summary>Migrated shared Postgres, factory, client, one fresh user + DEK.</summary>
+    /// <summary>Migrated shared Postgres, factory, client, one fresh user + DEK + unlocked session.</summary>
     public static async Task<SourcesHost> CreateUserAsync(PostgresFixture postgres)
     {
         var connectionString = await AccountTestHost.MigrateAsync(postgres);
         var factory = AccountTestHost.CreateFactory(connectionString);
         var client = AccountTestHost.CreateClient(factory);
-        var (userId, bearer, dek) = await AddUserAsync(factory);
-        return new SourcesHost(factory, client, userId, bearer, dek);
+        var (userId, bearer, dek, session) = await AddUserAsync(factory);
+        return new SourcesHost(factory, client, userId, bearer, dek, session);
     }
 
-    /// <summary>A second caller on the SAME factory (cross-user scenarios).</summary>
-    public static async Task<(Guid UserId, string Bearer, string Dek)> AddUserAsync(
+    /// <summary>A second caller on the SAME factory (cross-user scenarios), unlocked with its OWN DEK.</summary>
+    public static async Task<(Guid UserId, string Bearer, string Dek, string Session)> AddUserAsync(
         WebApplicationFactory<Program> factory)
     {
         var userId = await AdminTestHost.SeedUserAsync(factory, UniqueEmail());
         var bearer = await AdminTestHost.BearerAsync(factory, userId, "User");
-        return (userId, bearer, NewDek());
+        var dek = NewDek();
+        var session = await UnlockAsync(AccountTestHost.CreateClient(factory), bearer, dek);
+        return (userId, bearer, dek, session);
     }
 
-    /// <summary>An admin-role token for the 403 proof.</summary>
+    /// <summary>An admin-role token for the 403 proof (unlocked like any caller).</summary>
+    public static async Task<(string Bearer, string Session)> AdminAsync(
+        WebApplicationFactory<Program> factory)
+    {
+        var adminId = await AdminTestHost.SeedUserAsync(
+            factory, UniqueEmail("admin"), EmailAgent.Infrastructure.Enums.UserRole.Admin);
+        var bearer = await AdminTestHost.BearerAsync(factory, adminId, "Admin");
+        var session = await UnlockAsync(AccountTestHost.CreateClient(factory), bearer, NewDek());
+        return (bearer, session);
+    }
+
+    /// <summary>An admin-role token for tests that do not need a session.</summary>
     public static async Task<string> AdminBearerAsync(WebApplicationFactory<Program> factory)
     {
         var adminId = await AdminTestHost.SeedUserAsync(
@@ -74,22 +89,40 @@ internal static class SourcesTestHost
         return await AdminTestHost.BearerAsync(factory, adminId, "Admin");
     }
 
-    /// <summary>Bearer + optional DEK + optional JSON body (serialized verbatim).</summary>
+    /// <summary>
+    /// POST /v1/account/unlock with a 32-byte DEK and return the opaque
+    /// crypto-session token (M5T1 SQ-M5-1). The server wraps whatever DEK the
+    /// test supplies under a fresh session key — no passphrase leg, no
+    /// production service (AGENTS.md hard constraint 3).
+    /// </summary>
+    public static async Task<string> UnlockAsync(
+        HttpClient client, string bearer, string dek)
+    {
+        using var request = Request(
+            HttpMethod.Post, "/v1/account/unlock", bearer, new { dek });
+        using var response = await client.SendAsync(request);
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK,
+            "unlock must mint a session: " + await response.Content.ReadAsStringAsync());
+        var body = await AccountTestHost.ReadJsonAsync(response);
+        return body.GetProperty("crypto_session_token").GetString()!;
+    }
+
+    /// <summary>Bearer + optional X-Crypto-Session + optional JSON body (serialized verbatim).</summary>
     public static HttpRequestMessage Request(
         HttpMethod method,
         string path,
         string bearer,
         object? body = null,
-        string? dek = null)
+        string? session = null)
     {
         var request = new HttpRequestMessage(method, path)
         {
             Headers = { Authorization = new AuthenticationHeaderValue("Bearer", bearer) },
         };
 
-        if (dek is not null)
+        if (session is not null)
         {
-            request.Headers.Add(DekHeaderName, dek);
+            request.Headers.Add(SessionHeaderName, session);
         }
 
         if (body is not null)
@@ -107,10 +140,10 @@ internal static class SourcesTestHost
         string path,
         string bearer,
         string json,
-        string? dek = null,
+        string? session = null,
         string contentType = "application/json")
     {
-        var request = Request(method, path, bearer, dek: dek);
+        var request = Request(method, path, bearer, session: session);
         request.Content = new StringContent(json, Encoding.UTF8, contentType);
         return request;
     }
@@ -163,7 +196,7 @@ internal static class SourcesTestHost
         }
 
         using var response = await host.Client.SendAsync(
-            Request(HttpMethod.Post, "/v1/user/sources", host.Bearer, body, host.Dek));
+            Request(HttpMethod.Post, "/v1/user/sources", host.Bearer, body, host.Session));
         response.StatusCode.Should().Be(System.Net.HttpStatusCode.Created,
             $"create must succeed for '{displayName}': "
             + await response.Content.ReadAsStringAsync());
@@ -257,7 +290,7 @@ internal static class SourcesTestHost
         return Encoding.UTF8.GetString(plaintext);
     }
 
-    /// <summary>Plants Argon2id salt + params so GET /v1/user/account/kdf has material.</summary>
+    /// <summary>Plants Argon2id salt + params so GET /v1/user/account/kdf (the M2 route, session-gated since M5T1) has material.</summary>
     public static async Task<byte[]> SetKdfMaterialAsync(
         WebApplicationFactory<Program> factory, Guid userId)
     {
@@ -276,14 +309,14 @@ internal static class SourcesTestHost
     }
 
     /// <summary>
-    /// M2T6: plants REAL passphrase material for
-    /// <c>POST /v1/user/account/unwrap-dek</c> — Argon2id salt + params plus
-    /// the wrapped DEK produced by the factory's own
-    /// <see cref="IEncryptionService"/> — and returns the plaintext DEK
-    /// (base64, the X-User-Dek wire form) the endpoint must hand back.
-    /// <see cref="SetKdfMaterialAsync"/> only plants dummy bytes for
-    /// <c>GET /kdf</c>; these four columns are cryptographically consistent,
-    /// so the unwrap below actually authenticates. The optional
+    /// M2T6: plants REAL passphrase material for the legacy M2 unwrap flow —
+    /// Argon2id salt + params plus the wrapped DEK produced by the factory's
+    /// own <see cref="IEncryptionService"/> — and returns the plaintext DEK
+    /// (base64) the endpoint must hand back. Kept for the M2 unwrap-dek
+    /// contract that survives M5T1 (the route persists; it is simply
+    /// session-gated now). <see cref="SetKdfMaterialAsync"/> only plants dummy
+    /// bytes for <c>GET /kdf</c>; these four columns are cryptographically
+    /// consistent, so the unwrap below actually authenticates. The optional
     /// <paramref name="parameters"/> widen the Argon2id cost for tests that
     /// need to overlap derivations (the Q-E5 busy path).
     /// </summary>

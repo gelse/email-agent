@@ -5,6 +5,7 @@ using EmailAgent.Infrastructure.Audit;
 using EmailAgent.Infrastructure.Identity;
 using EmailAgent.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -45,6 +46,32 @@ public static class ServiceCollectionExtensions
 
         services.AddEncryption(configuration);
         services.AddAuth(configuration);
+        services.AddCryptoSessions(configuration);
+
+        return services;
+    }
+
+    /// <summary>
+    /// M5T1 (SQ-M5-1 / SQ-M5-6): registers the shared <c>IMemoryCache</c>, the
+    /// <b>singleton</b> <see cref="ICryptoSessionStore"/> (one session set per
+    /// process — <c>IMemoryCache</c> is shared) and the
+    /// <c>SESSION__IdleTimeout</c> / <c>SESSION__AbsoluteTimeout</c> binding
+    /// from the <c>Session</c> section, validated at host start
+    /// (<c>ValidateOnStart</c>): a non-positive timeout fails startup instead
+    /// of issuing already-expired sessions.
+    /// </summary>
+    public static IServiceCollection AddCryptoSessions(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddMemoryCache();
+
+        services.AddOptions<CryptoSessionOptions>()
+            .Bind(configuration.GetSection(CryptoSessionOptions.SectionName))
+            .Validate(CryptoSessionOptions.IsValid, CryptoSessionOptions.InvalidMessage)
+            .ValidateOnStart();
+
+        services.AddSingleton<ICryptoSessionStore, MemoryCryptoSessionStore>();
 
         return services;
     }

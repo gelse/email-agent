@@ -6,8 +6,11 @@ namespace EmailAgent.Spa.Auth;
 /// is <b>never</b> written to <c>localStorage</c>, <c>sessionStorage</c> or
 /// a cookie — losing it on F5 is by design; the httpOnly <c>ea_refresh</c>
 /// cookie plus <see cref="RefreshCookieAuthenticator"/> restore the session.
-/// M2T6 adds the sibling <see cref="DekStore"/> sub-store for the M2-only
-/// data-encryption key (SQ-12) — same lifetime rules, same "memory only".
+/// M5T1 replaces M2T6's <c>DekStore</c> sub-store with the sibling
+/// <see cref="CryptoSessionStore"/> slot holding the vault-unlock
+/// <c>X-Crypto-Session</c> token (SQ-M5-1 / §13.17) — same lifetime rules,
+/// same "memory only"; the token is lost on page refresh (re-prompt; the
+/// default explicitly does NOT take <c>sessionStorage</c>).
 /// </summary>
 public sealed class TokenStore
 {
@@ -15,12 +18,12 @@ public sealed class TokenStore
     private string? _token;
 
     /// <summary>
-    /// M2-only (SQ-12): the unwrapped per-user data-encryption key the
-    /// <c>X-User-Dek</c> transport carries. It is a sub-store of this
-    /// singleton rather than its own DI service, so one lifecycle governs
-    /// both values and <see cref="Clear"/> drops them together.
+    /// M5T1 (SQ-M5-1): the opaque session-key token returned once by
+    /// <c>POST /v1/account/unlock</c>. It is a sub-store of this singleton
+    /// rather than its own DI service, so one lifecycle governs both values
+    /// and <see cref="Clear"/> drops them together.
     /// </summary>
-    public DekStore DekStore { get; } = new();
+    public CryptoSessionStore CryptoSession { get; } = new();
 
     /// <summary>The current bearer access token, or <c>null</c> when signed out.</summary>
     public string? AccessToken
@@ -61,32 +64,25 @@ public sealed class TokenStore
     }
 
     /// <summary>
-    /// M2T6 review fix (CRITICAL): stores the token of a <b>fresh sign-in</b>
-    /// and drops any cached DEK first, so a key unwrapped for one account can
-    /// never ride along into another account's session (it would be sent as
-    /// <c>X-User-Dek</c> for the wrong caller and could wrap a blob nobody can
-    /// open — there is no re-wrap path in M2). Use this for login/otp-login;
+    /// M2T6 review fix (CRITICAL), carried into M5T1: stores the token of a
+    /// <b>fresh sign-in</b> and drops the cached crypto-session token first,
+    /// so a vault unlock minted for one account can never ride along into
+    /// another account's session (it would be presented as
+    /// <c>X-Crypto-Session</c> for the wrong caller and resolve to nothing —
+    /// the server keys sessions by user). Use this for login/otp-login;
     /// <see cref="RefreshCookieAuthenticator"/> uses it too when a refresh
     /// returns a token whose <c>sub</c> differs from the session's (the
     /// shared <c>ea_refresh</c> cookie can belong to an account signed in
     /// from another tab). <see cref="Set"/> stays for a same-principal
-    /// refresh, which must keep its key.
+    /// refresh, which must keep its unlock.
     /// </summary>
     public void SignIn(string token)
     {
-        DekStore.Clear();
+        CryptoSession.Clear();
         Set(token);
     }
 
-    /// <summary>
-    /// M2T6: caches the plaintext DEK returned by
-    /// <c>POST /v1/user/account/unwrap-dek</c> for this session (thin
-    /// delegate onto <see cref="DekStore"/> so callers have one obvious entry
-    /// point). Never persisted; see <see cref="DekStore"/>.
-    /// </summary>
-    public void SetDek(string dek) => DekStore.SetDek(dek);
-
-    /// <summary>Clears the token, session flags and DEK, and notifies subscribers.</summary>
+    /// <summary>Clears the token, session flags and crypto-session, and notifies subscribers.</summary>
     public void Clear()
     {
         lock (_gate)
@@ -96,61 +92,64 @@ public sealed class TokenStore
 
         NeedsPassphraseSetup = false;
         SessionEmail = null;
-        DekStore.Clear();
+        CryptoSession.Clear();
         Changed?.Invoke();
     }
 }
 
 /// <summary>
-/// M2T6 (SQ-12 / Q-E9): the in-memory home of the caller's unwrapped
-/// data-encryption key — the value the M2-only <c>X-User-Dek</c> header
-/// carries on <c>/v1/user/sources/*</c> requests. M2-only: M5's session-key
-/// envelope (M5T1 / §13.17) removes the header and this store with it.
+/// M5T1 (SQ-M5-1 / §13.17): the in-memory home of the vault-unlock
+/// <c>X-Crypto-Session</c> token — the credential every <c>/v1/user/*</c>
+/// request carries beside the JWT. M2T6's <c>DekStore</c> is gone with the
+/// <c>X-User-Dek</c> header: the DEK itself never reaches the browser again
+/// after unlock; the browser POSTs it once to <c>POST /v1/account/unlock</c>
+/// and keeps only this opaque token.
 /// </summary>
 /// <remarks>
-/// The DEK is held as base64 (the header's wire form), never written to
-/// <c>localStorage</c>, <c>sessionStorage</c>, IndexedDB or a cookie, and is
-/// dropped by <see cref="TokenStore.Clear"/> on logout — so a page refresh
-/// re-prompts for the passphrase. The SPA never derives it in the browser:
-/// the passphrase goes to <c>POST /v1/user/account/unwrap-dek</c> and the
-/// server unwraps the key for the signed-in caller.
+/// The token is held as the opaque string the server returned, never written
+/// to <c>localStorage</c>, <c>sessionStorage</c>, IndexedDB or a cookie, and
+/// is dropped by <see cref="TokenStore.Clear"/> on logout and by
+/// <see cref="TokenStore.SignIn"/> on an account switch — so a page refresh
+/// re-prompts for the passphrase (the DEFAULT per SQ-M5-1: no persistence
+/// path). The server-side session lives in the API's in-process
+/// <c>ICryptoSessionStore</c> and expires on its own idle/absolute timeouts.
 /// </remarks>
-public sealed class DekStore
+public sealed class CryptoSessionStore
 {
     private readonly Lock _gate = new();
-    private string? _dek;
+    private string? _token;
 
-    /// <summary>Base64 of the 32-byte DEK, or <c>null</c> when the session is locked.</summary>
-    public string? DekBase64
+    /// <summary>The opaque session-key token, or <c>null</c> when the vault is locked.</summary>
+    public string? Token
     {
         get
         {
             lock (_gate)
             {
-                return _dek;
+                return _token;
             }
         }
     }
 
-    /// <summary>True while no key is cached — the Sources page renders the passphrase prompt.</summary>
-    public bool IsEmpty => string.IsNullOrWhiteSpace(DekBase64);
+    /// <summary>True while no token is held — the Sources/Actions pages render the unlock prompt.</summary>
+    public bool IsEmpty => string.IsNullOrWhiteSpace(Token);
 
-    /// <summary>Caches <paramref name="dek"/> for the lifetime of the session (never persisted).</summary>
-    public void SetDek(string dek)
+    /// <summary>Caches <paramref name="token"/> for the lifetime of the session (never persisted).</summary>
+    public void SetToken(string token)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(dek);
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
         lock (_gate)
         {
-            _dek = dek;
+            _token = token;
         }
     }
 
-    /// <summary>Drops the key from memory (logout / account switch).</summary>
+    /// <summary>Drops the token from memory (logout / account switch / re-lock).</summary>
     public void Clear()
     {
         lock (_gate)
         {
-            _dek = null;
+            _token = null;
         }
     }
 }

@@ -6,6 +6,7 @@ using EmailAgent.Spa.Auth;
 using EmailAgent.Spa.Models;
 using EmailAgent.Spa.Notifications;
 using EmailAgent.Spa.NotificationsApi;
+using EmailAgent.Spa.Security;
 using EmailAgent.Spa.Sources;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -46,7 +47,28 @@ internal sealed class SpaTestContext : TestContext
         // M4T4: actions + notifications clients over the same stub.
         Services.AddScoped(sp => new ActionsClient(sp.GetRequiredService<HttpClient>()));
         Services.AddScoped(sp => new NotificationsClient(sp.GetRequiredService<HttpClient>()));
+
+        // M5T1: same registrations as Program.cs — the account client over
+        // the stub, the browser-crypto seam faked deterministically (bUnit
+        // has no JS runtime) and the unlock orchestrator on top of both.
+        Services.AddScoped(sp => new AccountClient(sp.GetRequiredService<HttpClient>()));
+        Services.AddSingleton<IUnlockCrypto>(_ => FakeCrypto);
+        Services.AddScoped(sp => new UnlockService(
+            sp.GetRequiredService<AccountClient>(),
+            sp.GetRequiredService<IUnlockCrypto>(),
+            sp.GetRequiredService<TokenStore>()));
     }
+
+    /// <summary>Opaque crypto-session token used by the M5T1 unit tests.</summary>
+    public const string CryptoSessionToken = "m5t1-session-token";
+
+    /// <summary>
+    /// The deterministic <see cref="IUnlockCrypto"/> every test shares: it
+    /// records each step's inputs (copied, because <see cref="UnlockService"/>
+    /// zeroes the KEK/DEK buffers afterwards) and returns a known 32-byte
+    /// KEK/DEK pair so tests can assert the exact bytes that hit the wire.
+    /// </summary>
+    public FakeUnlockCrypto FakeCrypto { get; } = new();
 
     /// <summary>The stub transport every page's injected HttpClient uses.</summary>
     public StubHttpHandler Handler { get; } = new();
@@ -130,5 +152,82 @@ internal sealed class StubHttpHandler : HttpMessageHandler
             request.RequestUri?.PathAndQuery ?? string.Empty,
             body));
         return await Responder(request, cancellationToken);
+    }
+}
+
+/// <summary>
+/// M5T1: the fake <see cref="IUnlockCrypto"/> standing in for the browser's
+/// Argon2id + <c>crypto.subtle</c>. It records the inputs of every step (as
+/// copies — <see cref="UnlockService"/> zeroes the KEK/DEK in a finally) and
+/// answers with known 32-byte keys, so a test can assert the derivation used
+/// the server's stored material and that the unwrapped DEK — and only the
+/// DEK, never the passphrase — reached the unlock POST.
+/// </summary>
+internal sealed class FakeUnlockCrypto : IUnlockCrypto
+{
+    /// <summary>KEK this fake "derives" (32 bytes, distinguishable from the DEK).</summary>
+    public static readonly byte[] Kek =
+        Enumerable.Range(0, 32).Select(i => (byte)(0xA0 + i)).ToArray();
+
+    /// <summary>DEK this fake "unwraps"; the unlock POST body must carry exactly this, base64.</summary>
+    public static readonly byte[] Dek =
+        Enumerable.Range(0, 32).Select(i => (byte)(0x10 + i)).ToArray();
+
+    /// <summary>The passphrase handed to DeriveKek (tests assert it never hits the wire).</summary>
+    public string? DerivedPassphrase { get; private set; }
+
+    /// <summary>The salt handed to DeriveKek (copy).</summary>
+    public byte[]? DerivedSalt { get; private set; }
+
+    /// <summary>The KDF params handed to DeriveKek (copy of the record).</summary>
+    public KdfParamsDto? DerivedParams { get; private set; }
+
+    /// <summary>The KEK handed to UnwrapDek (copy — must equal <see cref="Kek"/> before zeroing).</summary>
+    public byte[]? UnwrappedKek { get; private set; }
+
+    /// <summary>The wrapped DEK handed to UnwrapDek (copy).</summary>
+    public byte[]? UnwrappedWrapped { get; private set; }
+
+    /// <summary>The nonce handed to UnwrapDek (copy).</summary>
+    public byte[]? UnwrappedNonce { get; private set; }
+
+    /// <summary>When set, UnwrapDek throws it instead (wrong-passphrase path).</summary>
+    public Exception? UnwrapFailure { get; set; }
+
+    /// <summary>When set, DeriveKek throws it instead (interop-failure path).</summary>
+    public Exception? DeriveFailure { get; set; }
+
+    public Task<byte[]> DeriveKekAsync(
+        string passphrase,
+        byte[] salt,
+        KdfParamsDto kdfParams,
+        CancellationToken ct = default)
+    {
+        if (DeriveFailure is not null)
+        {
+            return Task.FromException<byte[]>(DeriveFailure);
+        }
+
+        DerivedPassphrase = passphrase;
+        DerivedSalt = salt.ToArray();
+        DerivedParams = kdfParams; // init-only DTO — safe to hold the reference
+        return Task.FromResult(Kek.ToArray());
+    }
+
+    public Task<byte[]> UnwrapDekAsync(
+        ReadOnlyMemory<byte> kek,
+        byte[] dekWrapped,
+        byte[] dekNonce,
+        CancellationToken ct = default)
+    {
+        UnwrappedKek = kek.ToArray();
+        UnwrappedWrapped = dekWrapped.ToArray();
+        UnwrappedNonce = dekNonce.ToArray();
+        if (UnwrapFailure is not null)
+        {
+            return Task.FromException<byte[]>(UnwrapFailure);
+        }
+
+        return Task.FromResult(Dek.ToArray());
     }
 }

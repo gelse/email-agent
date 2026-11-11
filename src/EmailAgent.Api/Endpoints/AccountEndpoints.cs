@@ -47,10 +47,16 @@ public static class AccountEndpoints
         public const string NoRefreshCookie = "/errors/no-refresh-cookie";
         public const string PassphraseAlreadySet = "/errors/passphrase-already-set";
         public const string CredentialMismatch = "/errors/credential-mismatch";
+
+        /// <summary>M5T1: no key material yet — the SPA runs the first-login passphrase flow.</summary>
+        public const string PassphraseNotSet = "/errors/passphrase-not-set";
+
+        /// <summary>M5T1: the unlock body's <c>dek</c> is not base64 / not 32 bytes (Q-E9, SQ-M5-1).</summary>
+        public const string DekInvalid = "/errors/dek-invalid";
     }
 
     /// <summary>
-    /// Maps the six account routes. Login/otp-login opt into the
+    /// Maps the account routes. Login/otp-login opt into the
     /// per-account Q-O7 policy; the per-IP half of Q-O7 rides the
     /// <c>RateLimiterOptions.GlobalLimiter</c> registered by
     /// <see cref="RateLimitPolicies.AddRateLimitPolicies"/> — the framework's
@@ -58,6 +64,8 @@ public static class AccountEndpoints
     /// <c>EnableRateLimiting</c> policy per endpoint (it reads the last
     /// metadata entry), so the two budgets are expressed as the global +
     /// endpoint chain rather than two stacked attributes.
+    /// M5T1 adds the JWT-authenticated <c>GET /kdf</c> + <c>POST /unlock</c>
+    /// pair (the §13.17 unlock flow, SQ-M5-1).
     /// </summary>
     public static IEndpointRouteBuilder MapAccountEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -91,6 +99,19 @@ public static class AccountEndpoints
 
         group.MapPost("/logout", Logout)
             .WithName("AccountLogout");
+
+        // M5T1 (SQ-M5-1 / §13.17): the unlock flow's two account-namespace
+        // routes — the KDF-material pre-step read and the session-key
+        // envelope itself. Both are plain JWT-authenticated (neither carries
+        // nor requires a crypto session — unlock is what creates it), and
+        // neither counts among the eight §13.3 M5 /v1/user/* routes.
+        group.MapGet("/kdf", KdfMaterial)
+            .WithName("AccountKdf")
+            .RequireAuthorization();
+
+        group.MapPost("/unlock", Unlock)
+            .WithName("AccountUnlock")
+            .RequireAuthorization();
 
         return endpoints;
     }
@@ -599,6 +620,205 @@ public static class AccountEndpoints
     }
 
     /// <summary>
+    /// <c>GET /v1/account/kdf</c> (M5T1) — the unlock flow's pre-step: the
+    /// caller's <c>kdf_salt</c>, <c>kdf_params</c>, <c>dek_wrapped</c> and
+    /// <c>dek_nonce</c> (base64). All four are non-secret: a salt, public KDF
+    /// parameters and the KEK-wrapped DEK ciphertext — GCM ciphertext the
+    /// server itself cannot open without the passphrase (SQ-M5-1). 409
+    /// <c>/errors/passphrase-not-set</c> when no key material exists yet.
+    /// Not audited (a read is not a state change).
+    /// </summary>
+    private static async Task<IResult> KdfMaterial(
+        HttpContext ctx,
+        UserManager<User> userManager,
+        CancellationToken ct)
+    {
+        var user = await userManager.GetUserAsync(ctx.User);
+        if (user is null)
+        {
+            return ProblemDetailsHelpers.Problem(
+                ctx,
+                StatusCodes.Status401Unauthorized,
+                ErrorTypes.Unauthorized,
+                "Unauthorized",
+                "The access token does not match a live account.");
+        }
+
+        if (user.Status == UserStatus.Disabled)
+        {
+            return ProblemDetailsHelpers.Problem(
+                ctx,
+                StatusCodes.Status403Forbidden,
+                ErrorTypes.Forbidden,
+                "Forbidden",
+                "This account is disabled.");
+        }
+
+        if (user.DekWrapped is not { Length: > 0 } dekWrapped
+            || user.KdfSalt is not { Length: > 0 } salt
+            || user.DekNonce is not { Length: 12 } dekNonce)
+        {
+            return ProblemDetailsHelpers.Problem(
+                ctx,
+                StatusCodes.Status409Conflict,
+                ErrorTypes.PassphraseNotSet,
+                "Conflict",
+                "No passphrase has been set for this account, so no key-derivation "
+                + "parameters exist yet. Complete the first-login passphrase flow.");
+        }
+
+        var kdfParams = user.KdfParams is { } document
+            ? document.RootElement.Clone()
+            : JsonSerializer.SerializeToDocument(KdfParams.Default()).RootElement.Clone();
+
+        // Key-derivation material for one caller: never cacheable (same rule
+        // as GET /v1/user/account/kdf).
+        ctx.Response.Headers.CacheControl = "no-store";
+
+        return Results.Json(
+            new KdfMaterialResponse
+            {
+                KdfSalt = Convert.ToBase64String(salt),
+                KdfParams = kdfParams,
+                DekWrapped = Convert.ToBase64String(dekWrapped),
+                DekNonce = Convert.ToBase64String(dekNonce),
+            },
+            UnlockJsonContext.Default,
+            statusCode: StatusCodes.Status200OK);
+    }
+
+    /// <summary>
+    /// <c>POST /v1/account/unlock</c> (M5T1, SQ-M5-1) — body
+    /// <c>{ "dek": "&lt;base64&gt;" }</c> → 200
+    /// <c>{ crypto_session_id, crypto_session_token }</c>. The browser did the
+    /// passphrase work (Argon2id KEK derivation and DEK unwrap) and sends only
+    /// the DEK, once: the server mints a random 256-bit session key, wraps the
+    /// DEK under it, and holds the entry in the in-process
+    /// <see cref="ICryptoSessionStore"/> — no table, no migration, no
+    /// persistence path (§13.17 / SQ-M5-1).
+    /// </summary>
+    /// <remarks>
+    /// Idempotent replace: any live session for this user is revoked first
+    /// (<c>crypto_session_revoked</c>, reason <c>replaced</c>) and a fresh one
+    /// created, so there is at most one live session per user and the token is
+    /// emitted exactly once (a second unlock returns a NEW token, never the
+    /// old one). Mappings: no live account → 401; disabled → 403; missing,
+    /// malformed, or over-size (2 KiB) body → 400 <c>/errors/validation</c>; a
+    /// <c>dek</c> that is not base64 or not exactly 32 bytes → 400
+    /// <c>/errors/dek-invalid</c> (Q-E9).
+    /// The success audit row is written AFTER the store write with
+    /// <c>metadata_json = { session_id }</c> only — never the token, never the
+    /// DEK. The endpoint itself requires no crypto-session credential (it is
+    /// the endpoint that creates one).
+    /// </remarks>
+    private static async Task<IResult> Unlock(
+        HttpContext ctx,
+        UserManager<User> userManager,
+        ICryptoSessionStore cryptoSessions,
+        IAuditLogger auditLogger,
+        CancellationToken ct)
+    {
+        var user = await userManager.GetUserAsync(ctx.User);
+        if (user is null)
+        {
+            return ProblemDetailsHelpers.Problem(
+                ctx,
+                StatusCodes.Status401Unauthorized,
+                ErrorTypes.Unauthorized,
+                "Unauthorized",
+                "The access token does not match a live account.");
+        }
+
+        if (user.Status == UserStatus.Disabled)
+        {
+            return ProblemDetailsHelpers.Problem(
+                ctx,
+                StatusCodes.Status403Forbidden,
+                ErrorTypes.Forbidden,
+                "Forbidden",
+                "This account is disabled.");
+        }
+
+        var (request, bodyError) = await ReadJsonBodyAsync<UnlockRequest>(ctx, ct, MaxUnlockBodyBytes);
+        if (bodyError is not null || request is null)
+        {
+            return bodyError ?? BodyRequired(ctx);
+        }
+
+        byte[] dek;
+        try
+        {
+            dek = UnlockDekCodec.Decode(request.Dek);
+        }
+        catch (InvalidDekException ex)
+        {
+            return ProblemDetailsHelpers.Problem(
+                ctx,
+                StatusCodes.Status400BadRequest,
+                ErrorTypes.DekInvalid,
+                "Invalid data-encryption key",
+                "The submitted data-encryption key is malformed. " + ex.Reason,
+                new[] { ("dek", ex.Reason) });
+        }
+
+        try
+        {
+            // Idempotent replace (SQ-M5-1): one live session per user — the
+            // previous one is revoked (audited with reason "replaced") before
+            // the fresh envelope is written.
+            var revokedSessionId = cryptoSessions.RevokeByUser(user.Id);
+            if (revokedSessionId is not null)
+            {
+                await auditLogger.LogAsync(
+                    new AuditEvent(
+                        ActorUserId: user.Id,
+                        ActorRole: user.Role.ToString(),
+                        Action: AuditActions.CryptoSessionRevoked,
+                        TargetType: "crypto_session",
+                        TargetId: revokedSessionId.Value.ToString(),
+                        MetadataJson:
+                            $"{{\"session_id\":\"{revokedSessionId.Value}\",\"reason\":\"replaced\"}}",
+                        Ip: ctx.Connection.RemoteIpAddress),
+                    ct);
+            }
+
+            var handle = cryptoSessions.CreateOrReplace(user.Id, dek, ct);
+
+            // Audit AFTER the store write (task step 5) — the row proves a
+            // session exists; metadata carries the session id only (SQ-M5-8's
+            // spirit: never the token, never the DEK).
+            await auditLogger.LogAsync(
+                new AuditEvent(
+                    ActorUserId: user.Id,
+                    ActorRole: user.Role.ToString(),
+                    Action: AuditActions.CryptoSessionOpened,
+                    TargetType: "crypto_session",
+                    TargetId: handle.SessionId.ToString(),
+                    MetadataJson: $"{{\"session_id\":\"{handle.SessionId}\"}}",
+                    Ip: ctx.Connection.RemoteIpAddress),
+                ct);
+
+            // The raw token is returned once; neither it nor the DEK is ever
+            // cached or logged here.
+            ctx.Response.Headers.CacheControl = "no-store";
+            return Results.Json(
+                new UnlockResponse
+                {
+                    CryptoSessionId = handle.SessionId,
+                    CryptoSessionToken = handle.Token,
+                },
+                UnlockJsonContext.Default,
+                statusCode: StatusCodes.Status200OK);
+        }
+        finally
+        {
+            // The DEK copy this request held leaves no trace (the store keeps
+            // only its AES-GCM wrap under the fresh session key).
+            CryptographicOperations.ZeroMemory(dek);
+        }
+    }
+
+    /// <summary>
     /// <c>POST /v1/account/refresh</c> — task step 8. Cookie-based (no JWT):
     /// look up by SHA-256 hash, rotate atomically, write the successor
     /// cookie and return a fresh access token. Reuse and expiry both map to
@@ -753,6 +973,7 @@ public static class AccountEndpoints
         HttpContext ctx,
         UserManager<User> userManager,
         IRefreshTokenStore refreshTokenStore,
+        ICryptoSessionStore cryptoSessions,
         IAuditLogger auditLogger,
         CancellationToken ct)
     {
@@ -783,6 +1004,27 @@ public static class AccountEndpoints
         // mint audit rows (the revoke itself is a harmless no-op).
         if (record is not null)
         {
+            // M5T1 (SQ-M5-1): logout revokes the user's crypto session along
+            // with the refresh token — the vault re-locks and the next visit
+            // prompts for the passphrase again. Emitted only when a session
+            // was actually live; metadata carries { session_id, reason } and
+            // never the token or DEK.
+            var revokedSessionId = cryptoSessions.RevokeByUser(record.UserId);
+            if (revokedSessionId is not null)
+            {
+                await auditLogger.LogAsync(
+                    new AuditEvent(
+                        ActorUserId: user?.Id ?? record.UserId,
+                        ActorRole: user?.Role.ToString(),
+                        Action: AuditActions.CryptoSessionRevoked,
+                        TargetType: "crypto_session",
+                        TargetId: revokedSessionId.Value.ToString(),
+                        MetadataJson:
+                            $"{{\"session_id\":\"{revokedSessionId.Value}\",\"reason\":\"logout\"}}",
+                        Ip: ctx.Connection.RemoteIpAddress),
+                    ct);
+            }
+
             await auditLogger.LogAsync(
                 new AuditEvent(
                     ActorUserId: user?.Id,
@@ -904,6 +1146,18 @@ public static class AccountEndpoints
         => JsonSerializer.Serialize(
             new Dictionary<string, string> { ["email"] = email.Trim() });
 
+    /// <summary>Hard cap on the whole unlock body (M5T1 review fix) — the payload is one 32-byte key, never kilobytes.</summary>
+    private const int MaxUnlockBodyBytes = 2048;
+
+    private static IResult BodyTooLarge(HttpContext ctx, int maxBytes)
+        => ProblemDetailsHelpers.Problem(
+            ctx,
+            StatusCodes.Status400BadRequest,
+            ErrorTypes.Validation,
+            "Validation failed",
+            "The request body is too large.",
+            new[] { ("body", $"The request body exceeds {maxBytes} bytes.") });
+
     private static readonly JsonSerializerOptions BodySerializerOptions =
         new(JsonSerializerDefaults.Web);
 
@@ -918,15 +1172,50 @@ public static class AccountEndpoints
     /// </summary>
     private static async Task<(TRequest? Body, IResult? Error)> ReadJsonBodyAsync<TRequest>(
         HttpContext ctx,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? maxBodyBytes = null)
         where TRequest : class
     {
         string raw;
-        using (var reader = new StreamReader(
-            ctx.Request.Body, Encoding.UTF8,
-            detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true))
+        if (maxBodyBytes is { } cap)
         {
-            raw = await reader.ReadToEndAsync(ct);
+            // Size cap (M5T1 review fix): Content-Length is checked up front,
+            // and the read itself is bounded so a chunked request (which
+            // carries no Content-Length header) cannot buffer past the cap
+            // either — the same shape M2T6 applied to the passphrase body.
+            if (ctx.Request.ContentLength > cap)
+            {
+                return (null, BodyTooLarge(ctx, cap));
+            }
+
+            var builder = new StringBuilder();
+            var chunk = new char[1024];
+            using (var reader = new StreamReader(
+                ctx.Request.Body, Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true))
+            {
+                int read;
+                while ((read = await reader.ReadAsync(chunk.AsMemory(), ct)) > 0)
+                {
+                    if (builder.Length + read > cap)
+                    {
+                        return (null, BodyTooLarge(ctx, cap));
+                    }
+
+                    builder.Append(chunk, 0, read);
+                }
+            }
+
+            raw = builder.ToString();
+        }
+        else
+        {
+            using (var reader = new StreamReader(
+                ctx.Request.Body, Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true))
+            {
+                raw = await reader.ReadToEndAsync(ct);
+            }
         }
 
         if (string.IsNullOrWhiteSpace(raw))

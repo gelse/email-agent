@@ -188,8 +188,15 @@ public class SourcesFetchNowTests(PostgresFixture postgres, GreenMailFixture gre
             "IEngineRegistry lands with M3; nothing here can call an engine that has no contract");
     }
 
+    /// <summary>
+    /// M5T1: the generic session gate replaces the retired x-user-dek
+    /// validation (a missing header never reaches the handler — 403
+    /// <c>/errors/crypto-locked</c>), while a session whose DEK cannot open
+    /// the source's config blob still fails INSIDE the handler with 400
+    /// <c>/errors/dek-invalid</c> — and nothing ran either way.
+    /// </summary>
     [Fact]
-    public async Task FetchNow_MissingDek_Returns400_AndWrongDek_DekInvalid()
+    public async Task FetchNow_MissingSession_Returns403_AndWrongDek_DekInvalid()
     {
         var (host, sourceId) = await SeedMailboxAndCreateSourceAsync(1);
         await using var factory = host.Factory;
@@ -197,13 +204,18 @@ public class SourcesFetchNowTests(PostgresFixture postgres, GreenMailFixture gre
 
         using var missing = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, $"/v1/user/sources/{sourceId}/fetch-now", host.Bearer));
-        (await SourcesTestHost.ReadErrorReasonAsync(
-            missing, HttpStatusCode.BadRequest, "/errors/validation", "x-user-dek"))
-            .Should().Contain("required");
+        var locked = await AccountTestHost.ReadProblemAsync(
+            missing, HttpStatusCode.Forbidden);
+        locked.GetProperty("type").GetString().Should().Be("/errors/crypto-locked",
+            "an unlocked session is judged by the gate, never by field validation");
 
+        // Re-unlock with a different DEK: its session cannot decrypt the
+        // source's stored config (the idempotent replace mints a new session).
+        var wrongSession = await SourcesTestHost.UnlockAsync(
+            client, host.Bearer, SourcesTestHost.NewDek());
         using var wrongDek = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, $"/v1/user/sources/{sourceId}/fetch-now",
-            host.Bearer, dek: SourcesTestHost.NewDek()));
+            host.Bearer, session: wrongSession));
         (await AccountTestHost.ReadProblemAsync(wrongDek, HttpStatusCode.BadRequest))
             .GetProperty("type").GetString().Should().Be("/errors/dek-invalid");
 
@@ -222,15 +234,15 @@ public class SourcesFetchNowTests(PostgresFixture postgres, GreenMailFixture gre
 
         using var unknown = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, $"/v1/user/sources/{Guid.NewGuid()}/fetch-now",
-            host.Bearer, dek: host.Dek));
+            host.Bearer, session: host.Session));
         (await AccountTestHost.ReadProblemAsync(unknown, HttpStatusCode.NotFound))
             .GetProperty("type").GetString().Should().Be("/errors/source-not-found");
 
-        var (intruderId, intruderBearer, intruderDek) = await SourcesTestHost.AddUserAsync(factory);
+        var (intruderId, intruderBearer, _, intruderSession) = await SourcesTestHost.AddUserAsync(factory);
         intruderId.Should().NotBe(host.UserId);
         using var foreign = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, $"/v1/user/sources/{sourceId}/fetch-now",
-            intruderBearer, dek: intruderDek));
+            intruderBearer, session: intruderSession));
         foreign.StatusCode.Should().Be(
             HttpStatusCode.NotFound, "a foreign id is indistinguishable from an unknown one");
     }
@@ -249,7 +261,7 @@ public class SourcesFetchNowTests(PostgresFixture postgres, GreenMailFixture gre
 
         // GET reflects the advance for the SPA.
         using var get = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, $"/v1/user/sources/{sourceId}", host.Bearer, dek: host.Dek));
+            HttpMethod.Get, $"/v1/user/sources/{sourceId}", host.Bearer, session: host.Session));
         get.StatusCode.Should().Be(HttpStatusCode.OK);
         var dto = await AccountTestHost.ReadJsonAsync(get);
         dto.GetProperty("checkpoint").GetProperty("last_uid").GetString().Should().Be(lastUid);
@@ -288,10 +300,10 @@ public class SourcesFetchNowTests(PostgresFixture postgres, GreenMailFixture gre
         return (host, SourcesTestHost.IdOf(created));
     }
 
-    private Task<HttpResponseMessage> FetchAsync(SourcesHost host, Guid sourceId, string? dek = null)
+    private Task<HttpResponseMessage> FetchAsync(SourcesHost host, Guid sourceId, string? session = null)
         => host.Client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, $"/v1/user/sources/{sourceId}/fetch-now",
-            host.Bearer, dek: dek ?? host.Dek));
+            host.Bearer, session: session ?? host.Session));
 
     /// <summary>Reads the M1T2 unique index definition straight from Postgres.</summary>
     private static async Task<string> ReadSourceUidIndexAsync(WebApplicationFactory<Program> factory)

@@ -14,11 +14,12 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 
 // ---------------------------------------------------------------------------
 // M2T5 — /v1/user/sources CRUD contract (task scope table + milestone
-// verification rows). Testcontainers Postgres + the real host; every test
-// gets its own user AND DEK (rate limiting is 60/min per user, and one DEK
-// must stay stable across the calls of a single test or the GCM tag fails).
-// The nine milestone-pinned names live here, in SourcesTestConnectionTests
-// and in SourcesFetchNowTests.
+// verification rows), migrated by M5T1 to the session-key envelope: one user
+// (and one DEK) per test, unlocked through POST /v1/account/unlock so every
+// request carries X-Crypto-Session (rate limiting is 60/min per user, and one
+// DEK must stay stable across the calls of a single test or the GCM tag
+// fails). The nine milestone-pinned names live here, in
+// SourcesTestConnectionTests and in SourcesFetchNowTests.
 // ---------------------------------------------------------------------------
 
 [Collection("Postgres")]
@@ -67,7 +68,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         config.TryGetProperty("password", out _).Should().BeFalse(
             "no response path may carry the connector password");
 
-        var raw = await GetSourceRawAsync(host.Client, host.Bearer, host.Dek, sourceId);
+        var raw = await GetSourceRawAsync(host.Client, host.Bearer, host.Session, sourceId);
         raw.Should().NotContain("password", "the raw JSON body must not carry the field either");
         raw.Should().NotContain(SourcesTestHost.ConfigPassword,
             "and never the plaintext credential");
@@ -134,7 +135,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         // GET /v1/user/sources returns both.
         using var listResponse = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, "/v1/user/sources", host.Bearer, dek: host.Dek));
+            HttpMethod.Get, "/v1/user/sources", host.Bearer, session: host.Session));
         listResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         var page = await AccountTestHost.ReadJsonAsync(listResponse);
         var ids = page.GetProperty("items").EnumerateArray()
@@ -160,7 +161,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/sources", host.Bearer,
             new { type_id = "imap", display_name = "bad port", config = badConfig },
-            host.Dek));
+            host.Session));
 
         response.Content.Headers.ContentType!.ToString()
             .Should().Contain("application/problem+json");
@@ -193,7 +194,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
                 display_name = "no plugin",
                 config = SourcesTestHost.Config(),
             },
-            host.Dek));
+            host.Session));
 
         var problem = await AccountTestHost.ReadProblemAsync(
             response, HttpStatusCode.BadRequest);
@@ -203,8 +204,15 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         problem.GetProperty("detail").GetString().Should().Contain("carrier-pigeon");
     }
 
+    /// <summary>
+    /// M5T1's replacement for the retired x-user-dek validation: every
+    /// /v1/user/* request is judged generically by the session gate, so a
+    /// missing, forged or foreign <c>X-Crypto-Session</c> never reaches the
+    /// handler — 403 <c>/errors/crypto-locked</c> instead of a 400 naming the
+    /// header, and still no audit row.
+    /// </summary>
     [Fact]
-    public async Task Sources_Post_MissingOrMalformedDek_Returns400_NamedXUserDek()
+    public async Task Sources_Post_MissingOrForgedSession_Returns403_CryptoLocked()
     {
         var host = await SourcesTestHost.CreateUserAsync(postgres);
         await using var factory = host.Factory;
@@ -213,31 +221,30 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         var body = new
         {
             type_id = "imap",
-            display_name = "dek gates",
+            display_name = "session gates",
             config = SourcesTestHost.Config(),
         };
 
         // Missing header.
         using var missing = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/sources", host.Bearer, body));
-        (await SourcesTestHost.ReadErrorReasonAsync(
-            missing, HttpStatusCode.BadRequest, "/errors/validation", "x-user-dek"))
-            .Should().Contain("required");
+        (await CryptoLockedAsync(missing)).Should().Contain("session",
+            "no X-Crypto-Session presented");
 
-        // Not base64.
-        using var malformed = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Post, "/v1/user/sources", host.Bearer, body, dek: "not base64 !!"));
-        (await SourcesTestHost.ReadErrorReasonAsync(
-            malformed, HttpStatusCode.BadRequest, "/errors/validation", "x-user-dek"))
-            .Should().Contain("base64");
-
-        // Wrong length (16 bytes ≠ 32).
-        using var shortKey = await client.SendAsync(SourcesTestHost.Request(
+        // Present but forged (authenticates nothing).
+        using var forged = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/sources", host.Bearer, body,
-            dek: Convert.ToBase64String(new byte[16])));
-        (await SourcesTestHost.ReadErrorReasonAsync(
-            shortKey, HttpStatusCode.BadRequest, "/errors/validation", "x-user-dek"))
-            .Should().Contain("32");
+            session: "forged-session-token"));
+        (await CryptoLockedAsync(forged)).Should().Contain("session");
+
+        // Another account's real session: the token does not authenticate
+        // THIS caller's session, so it resolves to nothing as well.
+        var (_, otherBearer, _, otherSession) = await SourcesTestHost.AddUserAsync(factory);
+        otherBearer.Should().NotBe(host.Bearer);
+        using var foreign = await client.SendAsync(SourcesTestHost.Request(
+            HttpMethod.Post, "/v1/user/sources", host.Bearer, body,
+            session: otherSession));
+        (await CryptoLockedAsync(foreign)).Should().Contain("session");
 
         (await AccountTestHost.AuditRowsAsync(factory, host.UserId))
             .Should().BeEmpty("a rejected request writes no audit row");
@@ -253,7 +260,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         // config absent.
         using var absent = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Post, "/v1/user/sources", host.Bearer,
-            """{"type_id":"imap","display_name":"x"}""", host.Dek));
+            """{"type_id":"imap","display_name":"x"}""", host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             absent, HttpStatusCode.BadRequest, "/errors/validation", "config"))
             .Should().Contain("config is required");
@@ -261,7 +268,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         // config explicitly null — distinguishable from absent.
         using var explicitNull = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Post, "/v1/user/sources", host.Bearer,
-            """{"type_id":"imap","display_name":"x","config":null}""", host.Dek));
+            """{"type_id":"imap","display_name":"x","config":null}""", host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             explicitNull, HttpStatusCode.BadRequest, "/errors/validation", "config"))
             .Should().Contain("JSON object");
@@ -269,7 +276,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         // Missing type_id / blank display_name.
         using var shapeless = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Post, "/v1/user/sources", host.Bearer,
-            """{"display_name":"  ","config":{}}""", host.Dek));
+            """{"display_name":"  ","config":{}}""", host.Session));
         var shapeProblem = await AccountTestHost.ReadProblemAsync(
             shapeless, HttpStatusCode.BadRequest);
         shapeProblem.GetProperty("type").GetString().Should().Be("/errors/validation");
@@ -280,14 +287,14 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         // Malformed JSON never reaches the framework binder as a 400 with a
         // different shape — it is a §13.12 validation document too.
         using var malformed = await client.SendAsync(SourcesTestHost.RawRequest(
-            HttpMethod.Post, "/v1/user/sources", host.Bearer, "{not json", host.Dek));
+            HttpMethod.Post, "/v1/user/sources", host.Bearer, "{not json", host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             malformed, HttpStatusCode.BadRequest, "/errors/validation", "body"))
             .Should().NotBeNullOrWhiteSpace();
 
         // Empty body.
         using var empty = await client.SendAsync(SourcesTestHost.RawRequest(
-            HttpMethod.Post, "/v1/user/sources", host.Bearer, "", host.Dek));
+            HttpMethod.Post, "/v1/user/sources", host.Bearer, "", host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             empty, HttpStatusCode.BadRequest, "/errors/validation", "body"))
             .Should().Contain("required");
@@ -306,7 +313,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Get, $"/v1/user/sources/{Guid.NewGuid()}",
-            host.Bearer, dek: host.Dek));
+            host.Bearer, session: host.Session));
 
         var problem = await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.NotFound);
         problem.GetProperty("type").GetString().Should().Be("/errors/source-not-found");
@@ -326,19 +333,19 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         var victim = await SourcesTestHost.CreateSourceAsync(host, "private source");
         var victimId = SourcesTestHost.IdOf(victim);
 
-        var (intruderId, intruderBearer, intruderDek) =
+        var (intruderId, intruderBearer, _, intruderSession) =
             await SourcesTestHost.AddUserAsync(factory);
         intruderId.Should().NotBe(host.UserId);
 
         using var get = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Get, $"/v1/user/sources/{victimId}",
-            intruderBearer, dek: intruderDek));
+            intruderBearer, session: intruderSession));
         using var patch = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Patch, $"/v1/user/sources/{victimId}",
-            intruderBearer, new { display_name = "stolen" }, intruderDek));
+            intruderBearer, new { display_name = "stolen" }, intruderSession));
         using var delete = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Delete, $"/v1/user/sources/{victimId}",
-            intruderBearer, dek: intruderDek));
+            intruderBearer, session: intruderSession));
 
         foreach (var response in new[] { get, patch, delete })
         {
@@ -364,9 +371,15 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         var created = await SourcesTestHost.CreateSourceAsync(host, "dek rotation");
         var sourceId = SourcesTestHost.IdOf(created);
 
+        // Re-unlock this SAME account with a different DEK (the idempotent
+        // replace mints a fresh session): its session key now wraps a DEK
+        // that cannot open the stored config blob.
+        var wrongSession = await SourcesTestHost.UnlockAsync(
+            client, host.Bearer, SourcesTestHost.NewDek());
+
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Get, $"/v1/user/sources/{sourceId}",
-            host.Bearer, dek: SourcesTestHost.NewDek()));
+            host.Bearer, session: wrongSession));
 
         var problem = await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.BadRequest);
         problem.GetProperty("type").GetString().Should().Be("/errors/dek-invalid");
@@ -386,7 +399,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         var mine1 = SourcesTestHost.IdOf(await SourcesTestHost.CreateSourceAsync(host, "mine one"));
         var mine2 = SourcesTestHost.IdOf(await SourcesTestHost.CreateSourceAsync(host, "mine two"));
 
-        var (otherId, otherBearer, otherDek) = await SourcesTestHost.AddUserAsync(factory);
+        var (otherId, otherBearer, _, otherSession) = await SourcesTestHost.AddUserAsync(factory);
         using (var otherCreate = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/sources", otherBearer,
             new
@@ -395,13 +408,13 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
                 display_name = "not yours",
                 config = SourcesTestHost.Config(),
             },
-            otherDek)))
+            otherSession)))
         {
             otherCreate.StatusCode.Should().Be(HttpStatusCode.Created);
         }
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, "/v1/user/sources", host.Bearer, dek: host.Dek));
+            HttpMethod.Get, "/v1/user/sources", host.Bearer, session: host.Session));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         // §13.14 on every authenticated response.
@@ -448,7 +461,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
             var path = "/v1/user/sources?limit=2"
                 + (cursor is null ? string.Empty : $"&cursor={cursor}");
             using var response = await client.SendAsync(SourcesTestHost.Request(
-                HttpMethod.Get, path, host.Bearer, dek: host.Dek));
+                HttpMethod.Get, path, host.Bearer, session: host.Session));
             response.StatusCode.Should().Be(HttpStatusCode.OK);
 
             var page = await AccountTestHost.ReadJsonAsync(response);
@@ -480,7 +493,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         // A bad cursor is a validation failure, not a 500.
         using var badCursor = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Get, "/v1/user/sources?limit=2&cursor=%25%25%25",
-            host.Bearer, dek: host.Dek));
+            host.Bearer, session: host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             badCursor, HttpStatusCode.BadRequest, "/errors/validation", "cursor"))
             .Should().NotBeNullOrWhiteSpace();
@@ -504,7 +517,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
                  })
         {
             using var response = await client.SendAsync(SourcesTestHost.Request(
-                HttpMethod.Get, "/v1/user/sources" + query, host.Bearer, dek: host.Dek));
+                HttpMethod.Get, "/v1/user/sources" + query, host.Bearer, session: host.Session));
             var reason = await SourcesTestHost.ReadErrorReasonAsync(
                 response, HttpStatusCode.BadRequest, "/errors/validation", name);
             reason.Should().NotBeNullOrWhiteSpace();
@@ -534,7 +547,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         // type_id filter: only imap rows of this caller.
         using (var byType = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, "/v1/user/sources?type_id=imap", host.Bearer, dek: host.Dek)))
+            HttpMethod.Get, "/v1/user/sources?type_id=imap", host.Bearer, session: host.Session)))
         {
             byType.StatusCode.Should().Be(HttpStatusCode.OK);
             (await IdsAsync(byType)).Should().Contain(activeImap);
@@ -543,7 +556,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         // A type this caller does not own: empty page, still 200.
         using (var byOtherType = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Get, "/v1/user/sources?type_id=openai-compatible",
-            host.Bearer, dek: host.Dek)))
+            host.Bearer, session: host.Session)))
         {
             byOtherType.StatusCode.Should().Be(HttpStatusCode.OK);
             (await IdsAsync(byOtherType)).Should().BeEmpty(
@@ -552,7 +565,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         // status filter: Active excludes the paused twin…
         using (var active = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, "/v1/user/sources?status=Active", host.Bearer, dek: host.Dek)))
+            HttpMethod.Get, "/v1/user/sources?status=Active", host.Bearer, session: host.Session)))
         {
             var ids = await IdsAsync(active);
             ids.Should().Contain(activeImap).And.NotContain(paused);
@@ -560,7 +573,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         // …and Paused selects exactly it.
         using (var pausedOnly = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, "/v1/user/sources?status=Paused", host.Bearer, dek: host.Dek)))
+            HttpMethod.Get, "/v1/user/sources?status=Paused", host.Bearer, session: host.Session)))
         {
             (await IdsAsync(pausedOnly)).Should().Equal(
                 [paused], "the paused filter selects exactly the paused row");
@@ -583,7 +596,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Patch, $"/v1/user/sources/{sourceId}", host.Bearer,
-            new { display_name = "after rename", interval_minutes = 30 }, host.Dek));
+            new { display_name = "after rename", interval_minutes = 30 }, host.Session));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var updated = await AccountTestHost.ReadJsonAsync(response);
@@ -614,7 +627,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         using var response = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Patch, $"/v1/user/sources/{sourceId}", host.Bearer,
             """{"config":{"host":"imap.changed.example","port":143,"use_ssl":false,"username":"m2t5-user","mailbox":"INBOX"}}""",
-            host.Dek));
+            host.Session));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var row = await SourcesTestHost.SourceRowAsync(factory, sourceId);
@@ -640,7 +653,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         using var response = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Patch, $"/v1/user/sources/{sourceId}", host.Bearer,
             $$$"""{"config":{"host":"imap.example.test","port":993,"use_ssl":true,"username":"m2t5-user","password":"","mailbox":"INBOX"}}""",
-            host.Dek));
+            host.Session));
         response.StatusCode.Should().Be(HttpStatusCode.OK,
             "the JSON-Schema minLength must not reject the documented empty password");
 
@@ -668,7 +681,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         using var response = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Patch, $"/v1/user/sources/{sourceId}", host.Bearer,
             $$$"""{"config":{"host":"imap.example.test","port":993,"use_ssl":true,"username":"m2t5-user","password":"{{{NewPassword}}}","mailbox":"INBOX"}}""",
-            host.Dek));
+            host.Session));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         // The response still never echoes it…
@@ -701,7 +714,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         {
             using var response = await client.SendAsync(SourcesTestHost.Request(
                 HttpMethod.Patch, $"/v1/user/sources/{sourceId}", host.Bearer,
-                new { interval_minutes = interval }, host.Dek));
+                new { interval_minutes = interval }, host.Session));
             var reason = await SourcesTestHost.ReadErrorReasonAsync(
                 response, HttpStatusCode.BadRequest,
                 "/errors/validation", "interval_minutes");
@@ -718,7 +731,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Patch, $"/v1/user/sources/{Guid.NewGuid()}", host.Bearer,
-            new { display_name = "ghost" }, host.Dek));
+            new { display_name = "ghost" }, host.Session));
 
         (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.NotFound))
             .GetProperty("type").GetString().Should().Be("/errors/source-not-found");
@@ -739,13 +752,14 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
             await SourcesTestHost.CreateSourceAsync(host, "to be deleted"));
         var blobId = (await SourcesTestHost.SourceRowAsync(factory, sourceId)).ConfigBlobId;
 
-        // No DEK header on DELETE: nothing is decrypted.
+        // The session is still required (the generic gate), but nothing is
+        // decrypted on DELETE — the config blob is cascade-removed as bytes.
         using var response = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Delete, $"/v1/user/sources/{sourceId}", host.Bearer));
+            HttpMethod.Delete, $"/v1/user/sources/{sourceId}", host.Bearer, session: host.Session));
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
         using var getAfter = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, $"/v1/user/sources/{sourceId}", host.Bearer, dek: host.Dek));
+            HttpMethod.Get, $"/v1/user/sources/{sourceId}", host.Bearer, session: host.Session));
         getAfter.StatusCode.Should().Be(HttpStatusCode.NotFound);
 
         (await SourcesTestHost.FindBlobAsync(factory, blobId)).Should().BeNull(
@@ -772,7 +786,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         await SourcesTestHost.InsertProcessedMessageAsync(factory, sourceId, "uid-1");
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Delete, $"/v1/user/sources/{sourceId}", host.Bearer));
+            HttpMethod.Delete, $"/v1/user/sources/{sourceId}", host.Bearer, session: host.Session));
 
         var problem = await AccountTestHost.ReadProblemAsync(
             response, HttpStatusCode.Conflict);
@@ -806,8 +820,10 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         // A valid token of the wrong role passes authentication but not authorization.
         var adminBearer = await SourcesTestHost.AdminBearerAsync(factory);
+        var adminSession = await SourcesTestHost.UnlockAsync(
+            client, adminBearer, SourcesTestHost.NewDek());
         using var wrongRole = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, "/v1/user/sources", adminBearer, dek: host.Dek));
+            HttpMethod.Get, "/v1/user/sources", adminBearer, session: adminSession));
         var forbidden = await AccountTestHost.ReadProblemAsync(
             wrongRole, HttpStatusCode.Forbidden);
         forbidden.GetProperty("type").GetString().Should().Be("/errors/forbidden");
@@ -824,7 +840,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         var salt = await SourcesTestHost.SetKdfMaterialAsync(factory, host.UserId);
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, "/v1/user/account/kdf", host.Bearer));
+            HttpMethod.Get, "/v1/user/account/kdf", host.Bearer, session: host.Session));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var body = await AccountTestHost.ReadJsonAsync(response);
@@ -847,7 +863,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         using var client = host.Client;
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, "/v1/user/account/kdf", host.Bearer));
+            HttpMethod.Get, "/v1/user/account/kdf", host.Bearer, session: host.Session));
 
         (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.Conflict))
             .GetProperty("type").GetString().Should().Be("/errors/passphrase-not-set");
@@ -875,7 +891,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
-            new { passphrase = UnwrapPassphrase }));
+            new { passphrase = UnwrapPassphrase }, session: host.Session));
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Headers.Contains("Cache-Control").Should().BeTrue(
@@ -912,7 +928,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
-            new { passphrase = "definitely-not-the-passphrase" }));
+            new { passphrase = "definitely-not-the-passphrase" }, session: host.Session));
 
         var problem = await AccountTestHost.ReadProblemAsync(
             response, HttpStatusCode.Unauthorized);
@@ -944,7 +960,8 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         using var client = host.Client;
 
         using var empty = await client.SendAsync(SourcesTestHost.RawRequest(
-            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, string.Empty));
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, string.Empty,
+            session: host.Session));
         (await AccountTestHost.ReadProblemAsync(empty, HttpStatusCode.Conflict))
             .GetProperty("type").GetString().Should().Be(
                 "/errors/passphrase-not-set",
@@ -952,7 +969,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
         using var withBody = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
-            new { passphrase = UnwrapPassphrase }));
+            new { passphrase = UnwrapPassphrase }, session: host.Session));
         (await AccountTestHost.ReadProblemAsync(withBody, HttpStatusCode.Conflict))
             .GetProperty("type").GetString().Should().Be("/errors/passphrase-not-set");
     }
@@ -973,21 +990,22 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         await SourcesTestHost.SetRealKdfMaterialAsync(factory, host.UserId, UnwrapPassphrase);
 
         using var missing = await client.SendAsync(SourcesTestHost.RawRequest(
-            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, "{}"));
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, "{}",
+            session: host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             missing, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
             .Should().Contain("required");
 
         using var empty = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
-            """{"passphrase":""}"""));
+            """{"passphrase":""}""", session: host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             empty, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
             .Should().Contain("required");
 
         using var whitespace = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
-            """{"passphrase":"    "}"""));
+            """{"passphrase":"    "}""", session: host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             whitespace, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
             .Should().Contain("required");
@@ -1003,7 +1021,8 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         await SourcesTestHost.SetRealKdfMaterialAsync(factory, host.UserId, UnwrapPassphrase);
 
         using var response = await client.SendAsync(SourcesTestHost.RawRequest(
-            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, "{not json"));
+            HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer, "{not json",
+            session: host.Session));
 
         (await SourcesTestHost.ReadErrorReasonAsync(
             response, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
@@ -1028,7 +1047,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         var oversized = new string('a', 64 * 1024);
         using var response = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
-            $"{{\"passphrase\":\"{oversized}\"}}"));
+            $"{{\"passphrase\":\"{oversized}\"}}", session: host.Session));
 
         (await SourcesTestHost.ReadErrorReasonAsync(
             response, HttpStatusCode.BadRequest, "/errors/validation", "passphrase"))
@@ -1037,7 +1056,10 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
 
     /// <summary>
     /// Status gate precedes the sentinel: a Disabled account is 403 even with
-    /// no key material (which would otherwise answer 409).
+    /// key material present (which would otherwise answer 409). The account
+    /// unlocks while Active and is disabled afterwards, because M5T1's
+    /// session gate runs generically first — the endpoint's own status gate
+    /// is what this ordering pins.
     /// </summary>
     [Fact]
     public async Task UnwrapDek_DisabledAccount_Returns403_BeforeSentinel()
@@ -1047,12 +1069,25 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         using var client = host.Client;
 
         var disabledId = await AdminTestHost.SeedUserAsync(
-            factory, SourcesTestHost.UniqueEmail("disabled"), UserRole.User, UserStatus.Disabled);
+            factory, SourcesTestHost.UniqueEmail("disabled"), UserRole.User);
         var disabledBearer = await AdminTestHost.BearerAsync(factory, disabledId, "User");
+        var disabledSession = await SourcesTestHost.UnlockAsync(
+            client, disabledBearer, SourcesTestHost.NewDek());
+        await SourcesTestHost.SetRealKdfMaterialAsync(factory, disabledId, UnwrapPassphrase);
+
+        // Disable AFTER the unlock: the session gate lets a valid session
+        // through, so the unwrap handler's own status gate is observable.
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<EmailAgentDbContext>();
+            var row = await db.Users.SingleAsync(u => u.Id == disabledId);
+            row.Status = UserStatus.Disabled;
+            await db.SaveChangesAsync();
+        }
 
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/account/unwrap-dek", disabledBearer,
-            new { passphrase = UnwrapPassphrase }));
+            new { passphrase = UnwrapPassphrase }, session: disabledSession));
 
         (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.Forbidden))
             .GetProperty("type").GetString().Should().Be("/errors/forbidden");
@@ -1095,7 +1130,7 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
         var responses = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
             client.SendAsync(SourcesTestHost.Request(
                 HttpMethod.Post, "/v1/user/account/unwrap-dek", host.Bearer,
-                new { passphrase = UnwrapPassphrase }))));
+                new { passphrase = UnwrapPassphrase }, session: host.Session))));
 
         try
         {
@@ -1129,11 +1164,19 @@ public class SourcesEndpointsTests(PostgresFixture postgres)
     // Helpers
     // -----------------------------------------------------------------------
 
+    /// <summary>Asserts the session gate's 403 <c>/errors/crypto-locked</c> verdict and returns its detail.</summary>
+    private static async Task<string> CryptoLockedAsync(HttpResponseMessage response)
+    {
+        var problem = await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.Forbidden);
+        problem.GetProperty("type").GetString().Should().Be("/errors/crypto-locked");
+        return problem.GetProperty("detail").GetString() ?? string.Empty;
+    }
+
     private static async Task<string> GetSourceRawAsync(
-        HttpClient client, string bearer, string dek, Guid sourceId)
+        HttpClient client, string bearer, string session, Guid sourceId)
     {
         using var response = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, $"/v1/user/sources/{sourceId}", bearer, dek: dek));
+            HttpMethod.Get, $"/v1/user/sources/{sourceId}", bearer, session: session));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         return await response.Content.ReadAsStringAsync();
     }

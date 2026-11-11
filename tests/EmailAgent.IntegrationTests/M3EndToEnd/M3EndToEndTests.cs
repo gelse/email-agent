@@ -415,7 +415,8 @@ internal static class M3TestHarness
         HttpClient Client,
         Guid AdminId,
         string Bearer,
-        string Marker);
+        string Marker,
+        string Session);
 
     /// <summary>One unique list-isolation + cleanup key per host.</summary>
     public static string NewMarker() => $"m3t7-{Guid.NewGuid():N}";
@@ -466,13 +467,17 @@ internal static class M3TestHarness
         var adminId = await AdminTestHost.SeedUserAsync(
             factory, $"{marker}@example.test", UserRole.Admin);
         var bearer = await AdminTestHost.BearerAsync(factory, adminId, "Admin");
-        return new M3Host(factory, client, adminId, bearer, marker);
+
+        // M5T1: /v1/user/* needs an unlocked crypto session alongside the JWT
+        // (POST /v1/account/unlock with a test-minted DEK, no production service).
+        var session = await SourcesTestHost.UnlockAsync(client, bearer, SourcesTestHost.NewDek());
+        return new M3Host(factory, client, adminId, bearer, marker, session);
     }
 
-    /// <summary>An authenticated request against a host's admin/user routes.</summary>
+    /// <summary>An authenticated request against a host's admin/user routes (X-Crypto-Session rides along for /v1/user/*).</summary>
     public static Task<HttpResponseMessage> SendAsync(
         M3Host host, HttpMethod method, string path, object? body = null)
-        => host.Client.SendAsync(AdminTestHost.Request(method, path, host.Bearer, body));
+        => host.Client.SendAsync(AdminTestHost.Request(method, path, host.Bearer, body, host.Session));
 
     /// <summary>
     /// The §13.13 admin create body. Prices are pinned to the values smoke

@@ -39,7 +39,8 @@ public sealed class InvalidCredentialsTests(PostgresFixture postgres, GreenMailF
             {
                 type_id = SourcesTestHost.ImapTypeId,
                 config = greenMail.CreateConfig(password: "definitely-not-the-password"),
-            }));
+            },
+            session: host.Session));
 
         response.StatusCode.Should().Be(
             HttpStatusCode.OK, "an authentication failure is a plugin outcome, not an HTTP error");
@@ -72,7 +73,7 @@ public sealed class InvalidCredentialsTests(PostgresFixture postgres, GreenMailF
                 display_name = "bad port source",
                 config = SourcesTestHost.Config(port: 99999),
             },
-            host.Dek));
+            session: host.Session));
 
         response.Content.Headers.ContentType!.ToString()
             .Should().Contain("application/problem+json");

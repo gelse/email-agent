@@ -1,0 +1,147 @@
+@inject TokenStore TokenStore
+@inject NavigationManager Nav
+@inject UnlockService Unlock
+
+@* M5T1 (SQ-M5-1 / §13.17 / Q-O28): the vault-unlock prompt. The passphrase
+   stays on the device: UnlockService fetches the non-secret KDF material,
+   derives the KEK in the browser (argon2-browser WASM via IUnlockCrypto),
+   unwraps the DEK with crypto.subtle, and POSTs the DEK once to
+   /v1/account/unlock — the server answers with the opaque X-Crypto-Session
+   token this session then carries on every /v1/user/* call. Nothing is
+   persisted: a page refresh (or logout) drops the token and re-prompts, the
+   DEFAULT per SQ-M5-1 (no sessionStorage). Replaces M2T6's PassphrasePrompt,
+   which shipped the passphrase to the server (Q-E9 removal). *@
+<div class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Unlock encrypted data">
+        <h2>Unlock encrypted data</h2>
+        <p class="hint">
+            Your sources and actions are stored encrypted. Enter your account
+            passphrase to unlock this session — the passphrase is derived into
+            your key here in the browser and is never sent to the server; only
+            the unwrapped key starts a short-lived server session once. The
+            unlock is dropped when you close the page, and you will be asked
+            again.
+        </p>
+
+        <EditForm Model="@_model" OnValidSubmit="@SubmitAsync" FormName="unlock-prompt">
+            <DataAnnotationsValidator />
+            <div class="form-field">
+                <label for="unlock-passphrase">Passphrase</label>
+                <InputText id="unlock-passphrase" type="password" class="form-control"
+                           @bind-Value="_model.Passphrase" autocomplete="current-password" />
+                <ValidationMessage For="@(() => _model.Passphrase)" />
+            </div>
+            <div class="modal-actions">
+                <button type="submit" class="btn-primary" id="unlock-submit" disabled="@_busy">
+                    @(_busy ? "Unlocking…" : "Unlock")
+                </button>
+            </div>
+        </EditForm>
+
+        @if (_error is not null)
+        {
+            <div class="error-box" id="unlock-error" role="alert">@_error</div>
+        }
+
+        @if (_notSet)
+        {
+            <p class="hint" id="unlock-not-set">
+                This account has no passphrase yet.
+                <a href="/account/set-passphrase" id="unlock-set-passphrase">Set a passphrase</a>
+                to finish the first-login flow.
+            </p>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Raised after a successful unlock, once the session token is in the store.</summary>
+    [Parameter, EditorRequired]
+    public EventCallback OnUnlocked { get; set; }
+
+    private readonly UnlockModel _model = new();
+    private string? _error;
+    private bool _busy;
+    private bool _notSet;
+
+    /// <summary>
+    /// Runs one unlock attempt through <see cref="UnlockService"/> and maps
+    /// every terminal outcome: 200 → <see cref="OnUnlocked"/> (the token is
+    /// already in <see cref="TokenStore.CryptoSession"/>); wrong passphrase →
+    /// inline error (decided in-browser, the passphrase never went anywhere);
+    /// 409 → first-login link; 401/403 → the SESSION failed, so route to
+    /// sign-in instead of blaming a passphrase that was never judged; 429 →
+    /// retry message; transport failure → generic banner. The passphrase
+    /// field is cleared on EVERY terminal outcome — the typed secret never
+    /// stays in the DOM once the attempt finished (M2T6 review rule carried
+    /// over).
+    /// </summary>
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _notSet = false;
+        _busy = true;
+        try
+        {
+            UnlockOutcome outcome;
+            try
+            {
+                outcome = await Unlock.UnlockAsync(_model.Passphrase ?? string.Empty);
+            }
+            catch (Exception)
+            {
+                // Backstop: UnlockService maps every typed failure itself, so
+                // anything escaping it (interop or harness surprise) must land
+                // on the prompt as a retryable message, never into the circuit.
+                outcome = new UnlockOutcome(
+                    UnlockStatus.Failed,
+                    "Something went wrong — please try again.");
+            }
+
+            switch (outcome.Status)
+            {
+                case UnlockStatus.Unlocked:
+                    await OnUnlocked.InvokeAsync();
+                    return;
+
+                case UnlockStatus.PassphraseNotSet:
+                    _notSet = true;
+                    _error = outcome.Message ?? "No passphrase has been set for this account yet.";
+                    return;
+
+                case UnlockStatus.NotAuthorized:
+                    // The session never made it (expired access token, refresh
+                    // cookie gone or revoked elsewhere) — signing in fixes it.
+                    Nav.NavigateTo("/account/login");
+                    return;
+
+                case UnlockStatus.RateLimited:
+                    _error = outcome.Message ?? "Too many unlock attempts — try again shortly.";
+                    return;
+
+                case UnlockStatus.Unreachable:
+                    _error = "Could not reach the API.";
+                    return;
+
+                case UnlockStatus.WrongPassphrase:
+                    _error = outcome.Message ?? "The passphrase is not valid.";
+                    return;
+
+                default:
+                    _error = outcome.Message ?? "Something went wrong — please try again.";
+                    return;
+            }
+        }
+        finally
+        {
+            _model.Passphrase = null;
+            _busy = false;
+        }
+    }
+
+    private sealed class UnlockModel
+    {
+        [Required(ErrorMessage = "The passphrase is required.")]
+        public string? Passphrase { get; set; }
+    }
+}

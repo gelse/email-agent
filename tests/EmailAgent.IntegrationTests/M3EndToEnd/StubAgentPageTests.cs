@@ -64,14 +64,17 @@ public sealed class StubAgentPageTests(PostgresFixture postgres) : IAsyncLifetim
             enabled: false, probeResult: ToolCallingProbeResult.Fail);
 
         // The caller is an ORDINARY User, not an Admin — this is the
-        // user-side page and the user-side route role.
+        // user-side page and the user-side route role. M5T1: /v1/user/models
+        // is session-gated, so this caller unlocks its own vault first.
         var userId = await AdminTestHost.SeedUserAsync(
             factory, $"{marker}-user@example.test", UserRole.User);
         var bearer = await AdminTestHost.BearerAsync(factory, userId, "User");
+        var session = await SourcesTestHost.UnlockAsync(
+            host.Client, bearer, SourcesTestHost.NewDek());
 
         using var recorder = new RecordingHandler();
         recorder.InnerHandler = factory.Server.CreateHandler();
-        using var flow = BuildFlow(factory, recorder, bearer);
+        using var flow = BuildFlow(factory, recorder, bearer, session);
         flow.Nav.NavigateTo("/user/agents/new");
 
         var page = flow.RenderComponent<AgentsNewStub>();
@@ -146,17 +149,19 @@ public sealed class StubAgentPageTests(PostgresFixture postgres) : IAsyncLifetim
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Bearer outside, recorder inside — the order Program.cs registers its
-    /// handlers (no DekHeaderHandler: the sources-only header has no business
-    /// on a model read).
+    /// Bearer outside, CryptoSessionHandler inside — the order Program.cs
+    /// registers its handlers (M5T1: the session-key envelope rides every
+    /// /v1/user/* call, models reads included).
     /// </summary>
     private static StubFlowContext BuildFlow(
         WebApplicationFactory<Program> factory,
         RecordingHandler recorder,
-        string bearer)
+        string bearer,
+        string session)
     {
         var store = new TokenStore();
         store.Set(bearer);
+        store.CryptoSession.SetToken(session);
 
         var refreshHttp = new HttpClient(factory.Server.CreateHandler())
         {
@@ -168,7 +173,10 @@ public sealed class StubAgentPageTests(PostgresFixture postgres) : IAsyncLifetim
         var apiHttp = new HttpClient(
             new BearerTokenHandler(store, authenticator)
             {
-                InnerHandler = recorder,
+                InnerHandler = new CryptoSessionHandler(store)
+                {
+                    InnerHandler = recorder,
+                },
             })
         {
             BaseAddress = BaseAddress,

@@ -8,10 +8,12 @@ using EmailAgent.Infrastructure.Audit;
 using EmailAgent.Infrastructure.Entities;
 using EmailAgent.Infrastructure.Enums;
 using EmailAgent.Infrastructure.Identity;
+using EmailAgent.Infrastructure.Security;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -188,9 +190,15 @@ public class RefreshTokenStoreTests(PostgresFixture postgres)
         // Negative TTL: the row is born past expires_at — the server-side
         // AUTH__RefreshTokenTtl check must refuse it (review WARNING: TTL
         // enforced nowhere).
+        // M5T1: the store cascades family revocation into the crypto sessions;
+        // this manual construction hands it an in-memory twin (revocation of an
+        // empty store is a no-op, which is exactly what this expiry fact wants).
         var store = new RefreshTokenStore(
             db,
             audit,
+            new MemoryCryptoSessionStore(
+                new MemoryCache(new MemoryCacheOptions()),
+                Options.Create(new CryptoSessionOptions())),
             auditOptions,
             Options.Create(new AuthOptions { RefreshTokenTtl = TimeSpan.FromMinutes(-5) }));
 

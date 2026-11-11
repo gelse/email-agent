@@ -146,4 +146,21 @@ public static class AuditActions
     /// plus <c>issues[]</c> (first 10 <c>{path, reason}</c>).
     /// </summary>
     public const string ActionInvalidArgs = "action_invalid_args";
+
+    // --- M5: crypto session (SQ-M5-1 / SQ-M5-10) ---------------------------
+
+    /// <summary>
+    /// M5T1: <c>POST /v1/account/unlock</c> opened — or, when one already
+    /// existed, replaced — the user's crypto session. <c>metadata_json</c>
+    /// carries <c>{ session_id }</c>; never the token, the KEK or the DEK.
+    /// </summary>
+    public const string CryptoSessionOpened = "crypto_session_opened";
+
+    /// <summary>
+    /// M5T1: the user's crypto session was revoked (logout, unlock
+    /// replacement, refresh-family revocation, or the delete-user cascade).
+    /// <c>metadata_json</c> carries <c>{ session_id, reason }</c> — never the
+    /// token (SQ-M5-10).
+    /// </summary>
+    public const string CryptoSessionRevoked = "crypto_session_revoked";
 }

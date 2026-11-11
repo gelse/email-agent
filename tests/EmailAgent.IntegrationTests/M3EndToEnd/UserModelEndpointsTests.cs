@@ -134,8 +134,13 @@ public sealed class UserModelEndpointsTests(PostgresFixture postgres) : IAsyncLi
         var userId = await AdminTestHost.SeedUserAsync(
             factory, $"{host.Marker}-user@example.test", UserRole.User);
         var userBearer = await AdminTestHost.BearerAsync(factory, userId, "User");
+
+        // M5T1: the ordinary User unlocks too — each caller presents its OWN
+        // X-Crypto-Session envelope (the session is judged per caller).
+        var userSession = await SourcesTestHost.UnlockAsync(
+            host.Client, userBearer, SourcesTestHost.NewDek());
         using var userResponse = await host.Client.SendAsync(AdminTestHost.Request(
-            HttpMethod.Get, "/v1/user/models?limit=100", userBearer));
+            HttpMethod.Get, "/v1/user/models?limit=100", userBearer, session: userSession));
         userResponse.StatusCode.Should().Be(
             HttpStatusCode.OK, "the User role is half of the published role set");
         M3TestHarness.AssertRateLimitHeaders(userResponse, "GET 200 (User)");

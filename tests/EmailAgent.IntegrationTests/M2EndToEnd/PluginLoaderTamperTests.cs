@@ -90,10 +90,11 @@ public sealed class PluginLoaderTamperTests(PostgresFixture postgres)
 
         // (c) The API surface agrees: no socket is opened, the request fails
         // with the RFC 7807 type the smoke script pins for flow 3.
-        var (_, bearer, _) = await SourcesTestHost.AddUserAsync(factory);
+        var (_, bearer, _, session) = await SourcesTestHost.AddUserAsync(factory);
         using var response = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/sources/test-connection", bearer,
-            new { type_id = "imap", config = SourcesTestHost.Config() }));
+            new { type_id = "imap", config = SourcesTestHost.Config() },
+            session: session));
 
         (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.BadRequest))
             .GetProperty("type").GetString().Should().Be("/errors/plugin-not-registered");

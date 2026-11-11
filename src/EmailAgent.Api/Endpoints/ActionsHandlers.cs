@@ -3,9 +3,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using EmailAgent.Api.Actions;
+using EmailAgent.Api.Auth;
 using EmailAgent.Api.Errors;
 using EmailAgent.Api.Pagination;
 using EmailAgent.Api.Sources;
+using EmailAgent.Core.Security;
 using EmailAgent.Infrastructure.Entities;
 using EmailAgent.Infrastructure.Enums;
 using FluentValidation;
@@ -18,18 +20,16 @@ namespace EmailAgent.Api.Endpoints;
 /// <summary>M4T3: HTTP handlers for /v1/user/actions and /v1/user/notifications.</summary>
 public static class ActionsHandlers
 {
-    public const string DekHeaderName = "X-User-Dek";
-    private const int DekByteLength = 32;
-
     // ----------------------------- Actions ---------------------------------
 
     internal static async Task<IResult> ListActions(
-        HttpContext ctx, ActionConfigService service, UserManager<User> userManager, CancellationToken ct)
+        HttpContext ctx, ActionConfigService service, UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession, CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActionActorAsync(ctx, userManager, ct);
         if (actorError is not null) return actorError;
 
-        var (dek, dekError) = ReadDekRequired(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null) return dekError;
 
         try
@@ -61,12 +61,13 @@ public static class ActionsHandlers
     }
 
     internal static async Task<IResult> CreateAction(
-        HttpContext ctx, ActionConfigService service, UserManager<User> userManager, CancellationToken ct)
+        HttpContext ctx, ActionConfigService service, UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession, CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActionActorAsync(ctx, userManager, ct);
         if (actorError is not null) return actorError;
 
-        var (dek, dekError) = ReadDekRequired(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null) return dekError;
 
         try
@@ -89,12 +90,13 @@ public static class ActionsHandlers
     }
 
     internal static async Task<IResult> GetAction(
-        HttpContext ctx, Guid id, ActionConfigService service, UserManager<User> userManager, CancellationToken ct)
+        HttpContext ctx, Guid id, ActionConfigService service, UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession, CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActionActorAsync(ctx, userManager, ct);
         if (actorError is not null) return actorError;
 
-        var (dek, dekError) = ReadDekRequired(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null) return dekError;
 
         try
@@ -107,12 +109,13 @@ public static class ActionsHandlers
     }
 
     internal static async Task<IResult> UpdateAction(
-        HttpContext ctx, Guid id, ActionConfigService service, UserManager<User> userManager, CancellationToken ct)
+        HttpContext ctx, Guid id, ActionConfigService service, UserManager<User> userManager,
+        ICryptoSessionAccessor cryptoSession, CancellationToken ct)
     {
         var (actor, actorError) = await ResolveActionActorAsync(ctx, userManager, ct);
         if (actorError is not null) return actorError;
 
-        var (dek, dekError) = ReadDekRequired(ctx);
+        var (dek, dekError) = ReadDek(ctx, cryptoSession);
         if (dekError is not null) return dekError;
 
         try
@@ -246,33 +249,29 @@ public static class ActionsHandlers
         return (user, null);
     }
 
-    /// <summary>M4T3: missing header → /errors/dek-required; malformed/wrong-length → /errors/dek-invalid.</summary>
-    private static (byte[]? Dek, IResult? Error) ReadDekRequired(HttpContext ctx)
+    /// <summary>
+    /// M5T1: resolves the DEK from the crypto-session accessor (the M2–M4
+    /// <c>X-User-Dek</c> header and its <c>/errors/dek-required</c> /
+    /// <c>/errors/dek-invalid</c> verdicts are removed — superseded by the
+    /// generic 403 <c>/errors/crypto-locked</c> the namespace guard emits
+    /// before any handler runs; this fallback covers direct invocation only).
+    /// </summary>
+    private static (byte[]? Dek, IResult? Error) ReadDek(HttpContext ctx, ICryptoSessionAccessor cryptoSession)
     {
-        var header = ctx.Request.Headers[DekHeaderName].ToString();
-        if (string.IsNullOrWhiteSpace(header))
+        var result = cryptoSession.TryGetDek();
+        if (!result.IsOk || result.Dek is null)
         {
-            return (null, Problem(ctx, 400, ActionErrors.Types.DekRequired, "Data-encryption key required",
-                $"The {DekHeaderName} header is required (M2–M4 transport; M5 replaces it with the session-key envelope)."));
+            return (null, CryptoLockedProblem(ctx));
         }
 
-        byte[] dek;
-        try { dek = Convert.FromBase64String(header.Trim()); }
-        catch (FormatException)
-        {
-            return (null, Problem(ctx, 400, ActionErrors.Types.DekInvalid, "Invalid data-encryption key",
-                $"The {DekHeaderName} header must be base64."));
-        }
-
-        if (dek.Length != DekByteLength)
-        {
-            Zero(dek);
-            return (null, Problem(ctx, 400, ActionErrors.Types.DekInvalid, "Invalid data-encryption key",
-                $"The {DekHeaderName} header must decode to {DekByteLength} bytes."));
-        }
-
-        return (dek, null);
+        return (result.Dek, null);
     }
+
+    /// <summary>403 <c>/errors/crypto-locked</c> — unlock again with the passphrase (SQ-M5-1).</summary>
+    private static IResult CryptoLockedProblem(HttpContext ctx)
+        => Problem(ctx, 403, CryptoSessionMiddleware.CryptoLockedErrorType, "Crypto session locked",
+            "The data-encryption vault for this session is locked or expired. "
+            + "Unlock with the account passphrase and retry.");
 
     private static readonly JsonSerializerOptions BodySerializerOptions = new(JsonSerializerDefaults.Web);
 
@@ -301,7 +300,7 @@ public static class ActionsHandlers
 
     private static bool IsActionFailure(Exception ex) => ex is
         ActionConfigNotFoundException or ActionPluginNotRegisteredException
-        or ActionConfigValidationException or ActionDekRequiredException
+        or ActionConfigValidationException
         or ActionDekInvalidException or ActionBlobMissingException
         or ActionInUseException or InvalidCursorException;
 
@@ -312,9 +311,13 @@ public static class ActionsHandlers
         ActionPluginNotRegisteredException e => Problem(ctx, 400, ActionErrors.Types.PluginNotRegistered, "Plugin not registered", e.Message),
         ActionConfigValidationException e => Problem(ctx, 400, ActionErrors.Types.ConfigValidation, "Invalid action configuration",
             "The action configuration failed the handler's schema validation.", ConfigErrorMapper.Map(e.Schema, e.Issues)),
-        ActionDekRequiredException e => Problem(ctx, 400, ActionErrors.Types.DekRequired, "Data-encryption key required", e.Message),
-        ActionDekInvalidException => Problem(ctx, 400, ActionErrors.Types.DekInvalid, "Invalid data-encryption key",
-            "The supplied data-encryption key does not open this action's configuration. Send the key belonging to the signed-in account."),
+        // M5T1: a blob that the session DEK cannot open means the session key
+        // is wrong for this account's data — the re-unlock verdict (403
+        // /errors/crypto-locked), not M4T3's 400 /errors/dek-invalid.
+        ActionDekInvalidException => Problem(ctx, 403, CryptoSessionMiddleware.CryptoLockedErrorType,
+            "Crypto session locked",
+            "The session's data-encryption key does not open this action's configuration. "
+            + "Unlock with the account passphrase and retry."),
         ActionBlobMissingException => Problem(ctx, 500, ActionErrors.Types.InternalBlobMissing, "Internal blob missing",
             "An encrypted configuration blob required by this action cannot be read."),
         ActionInUseException e => Problem(ctx, 409, ActionErrors.Types.ActionInUse, "Action in use",

@@ -22,8 +22,6 @@ public static class ActionErrors
         public const string ActionNotFound = "/errors/action-not-found";
         public const string PluginNotRegistered = "/errors/plugin-not-registered";
         public const string NotificationNotFound = "/errors/notification-not-found";
-        public const string DekRequired = "/errors/dek-required";
-        public const string DekInvalid = "/errors/dek-invalid";
         public const string ActionInUse = "/errors/action-in-use";
         public const string InternalBlobMissing = "/errors/internal-blob-missing";
     }
@@ -49,11 +47,13 @@ public sealed class ActionConfigValidationException(
     public JsonSchema Schema { get; } = schema ?? throw new ArgumentNullException(nameof(schema));
 }
 
-public sealed class ActionDekRequiredException()
-    : Exception("The X-User-Dek header is required.");
-
+/// <summary>
+/// M4T3 (M5T1 remap): a blob the session DEK cannot open — mapped to the 403
+/// <c>/errors/crypto-locked</c> re-unlock verdict instead of M4T3's removed
+/// <c>/errors/dek-invalid</c>.
+/// </summary>
 public sealed class ActionDekInvalidException(Guid blobId, Exception? innerException = null)
-    : Exception("The supplied data-encryption key does not open this action configuration.", innerException)
+    : Exception("The session's data-encryption key does not open this action configuration.", innerException)
 {
     public Guid BlobId { get; } = blobId;
 }

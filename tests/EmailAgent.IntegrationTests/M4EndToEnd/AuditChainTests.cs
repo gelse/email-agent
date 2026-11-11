@@ -36,8 +36,8 @@ public sealed class AuditChainTests(PostgresFixture postgres)
         var registry = factory.Services.GetRequiredService<Infrastructure.Plugins.IPluginRegistry>();
         registry.RegisterActionHandler("imap-reply", new global::EmailAgent.Connectors.Imap.ImapReplyActionHandler());
 
-        var (userId, bearer, dek) = await SourcesTestHost.AddUserAsync(factory);
-        var host = new M4TestHarness.M4Host(factory, AccountTestHost.CreateClient(factory), userId, bearer, dek, Convert.FromBase64String(dek));
+        var (userId, bearer, dek, session) = await SourcesTestHost.AddUserAsync(factory);
+        var host = new M4TestHarness.M4Host(factory, AccountTestHost.CreateClient(factory), userId, bearer, dek, Convert.FromBase64String(dek), session);
 
         // Config uses a dummy SMTP endpoint; only schema validation runs on CRUD,
         // and dispatches below are dry-run / invalid-args (no SMTP session).
@@ -57,7 +57,7 @@ public sealed class AuditChainTests(PostgresFixture postgres)
             host, "imap-reply", "Chain", requireConfirmation: false, dryRunDefault: true, smtpConfig);
         var id = created.GetProperty("id").GetGuid();
         using (var patch = await host.Client.SendAsync(SourcesTestHost.Request(HttpMethod.Patch,
-            $"/v1/user/actions/{id}", host.Bearer, new { display_name = "Chain2" }, host.Dek)))
+            $"/v1/user/actions/{id}", host.Bearer, new { display_name = "Chain2" }, host.Session)))
             patch.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
 
         var agent = await M4TestHarness.SeedAgentAsync(factory, host.UserId, "imap-reply");
@@ -72,7 +72,7 @@ public sealed class AuditChainTests(PostgresFixture postgres)
 
         // delete_action
         using (var del = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Delete, $"/v1/user/actions/{id}", host.Bearer)))
+            SourcesTestHost.Request(HttpMethod.Delete, $"/v1/user/actions/{id}", host.Bearer, session: host.Session)))
             del.StatusCode.Should().Be(System.Net.HttpStatusCode.NoContent);
 
         // Verify full chain

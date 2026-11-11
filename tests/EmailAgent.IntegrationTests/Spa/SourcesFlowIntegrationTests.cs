@@ -1,10 +1,14 @@
 using System.Net;
+using System.Security.Cryptography;
 using Bunit;
+using EmailAgent.Core.Security;
 using EmailAgent.Infrastructure;
 using EmailAgent.IntegrationTests.Endpoints;
 using EmailAgent.IntegrationTests.Fixtures;
 using EmailAgent.Spa.Auth;
+using EmailAgent.Spa.Models;
 using EmailAgent.Spa.Notifications;
+using EmailAgent.Spa.Security;
 using EmailAgent.Spa.Sources;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -12,23 +16,28 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-// The unlock page lives in EmailAgent.Spa.Pages.User; it is aliased because
-// the typed client's own namespace is called EmailAgent.Spa.Sources.
+// The unlock prompt lives in EmailAgent.Spa.Components and the page in
+// EmailAgent.Spa.Pages.User; the page is aliased because the typed client's
+// own namespace is called EmailAgent.Spa.Sources.
 using SourcesPage = EmailAgent.Spa.Pages.User.Sources;
 
 namespace EmailAgent.IntegrationTests.Spa;
 
 // ---------------------------------------------------------------------------
-// M2T6 step 9: the /user/sources screens driven through real bUnit pages over
-// the PRODUCTION transport (BearerTokenHandler -> DekHeaderHandler -> recorded
-// seam -> TestServer) against Testcontainers Postgres + Greenmail. Adjudication
-// R2 is the spine: the passphrase is POSTed to /v1/user/account/unwrap-dek, the
-// server unwraps the caller's own key, and only afterwards does X-User-Dek ride
-// every sources call — the recorded handler keeps method/path/body/status plus
-// both auth headers, so the suite proves both halves of that claim (no key
-// header before the unlock, the server's own key after it) and that
-// GET /v1/user/account/kdf is never called at all (nothing derives a key in the
-// browser).
+// M2T6 step 9, migrated by M5T1: the /user/sources screens driven through
+// real bUnit pages over the PRODUCTION transport (BearerTokenHandler ->
+// CryptoSessionHandler -> recorded seam -> TestServer) against Testcontainers
+// Postgres + Greenmail. The spine is now the §13.17 unlock flow: the
+// passphrase stays in the browser — GET /v1/account/kdf hands over the
+// non-secret material, IUnlockCrypto derives the KEK and unwraps the DEK in
+// "the browser" (bUnit has no JS runtime, so the Q-O28 seam is substituted
+// with the SAME primitives in .NET: Isopoh Argon2id + AES-GCM, no production
+// service and no network beyond the TestServer), and POST /v1/account/unlock
+// returns the opaque X-Crypto-Session token that then rides every
+// /v1/user/sources call. The recorded handler keeps method/path/body/status
+// plus both headers, so the suite proves both halves of that claim (no
+// session header before the unlock, the minted token after it) and that the
+// passphrase NEVER appears on the wire.
 //
 // Delete is split across the last two facts on purpose: a source that already
 // has processed_messages rows cannot be removed in M2 (Q-O15 -> 409
@@ -50,26 +59,28 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
 
     private const string WrongPassphrase = "definitely-not-the-passphrase";
 
-    /// <summary>Argon2id unwrap + container-backed IMAP round-trips need headroom.</summary>
+    /// <summary>Argon2id derivation + container-backed IMAP round-trips need headroom.</summary>
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
     /// <summary>Same-origin dev origin (nginx serves SPA + API — §13.9).</summary>
     private static readonly Uri BaseAddress = new("http://localhost:8081/");
 
     // -----------------------------------------------------------------------
-    // R2: unlock prompt -> real unwrap -> table, header semantics in between.
+    // The unlock flow: prompt -> real kdf + unlock -> table, headers in between.
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// An empty <c>DekStore</c> hides the table behind the prompt, the WRONG
-    /// passphrase is a 401 the SPA renders inline (nothing reaches the store),
-    /// and the right one hands back the server's own DEK — which then rides
-    /// every <c>/v1/user/sources</c> call. The unwrap POSTs carry no
-    /// <c>X-User-Dek</c> (the key does not exist yet) and no
-    /// <c>GET /v1/user/account/kdf</c> happens at all.
+    /// An empty crypto session hides the table behind the prompt, the WRONG
+    /// passphrase fails the in-browser GCM tag check (inline error, nothing
+    /// reaches the unlock endpoint), and the right one walks the real
+    /// <c>GET /v1/account/kdf</c> + <c>POST /v1/account/unlock</c> pair — whose
+    /// opaque token then rides every <c>/v1/user/sources</c> call as
+    /// <c>X-Crypto-Session</c>. Neither the passphrase nor a DEK header ever
+    /// appears on the wire, and the legacy <c>/v1/user/account/unwrap-dek</c>
+    /// route is never touched.
     /// </summary>
     [Fact]
-    public async Task SourcesFlow_UnlockPrompt_ThenTable_ThroughRealUnwrapDek()
+    public async Task SourcesFlow_UnlockPrompt_ThenTable_ThroughRealUnlockFlow()
     {
         var connectionString = await AccountTestHost.MigrateAsync(postgres);
         await using var factory = AccountTestHost.CreateFactory(connectionString);
@@ -80,21 +91,21 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
             factory, userId, FlowPassphrase);
 
         using var recorder = new RecordingHandler { InnerHandler = factory.Server.CreateHandler() };
-        using var flow = BuildFlow(factory, recorder, bearer, dek: null);
+        using var flow = BuildFlow(factory, recorder, bearer, session: null, userId);
 
         // ---- locked session: prompt only, no table, no list request ----
         var page = flow.RenderComponent<SourcesPage>();
         page.WaitForAssertion(
             () => page.Find("#unlock-submit").Should().NotBeNull(
-                "an empty DekStore presents the R2 passphrase prompt"), Wait);
-        page.Markup.Should().Contain("Unlock encrypted sources");
+                "an empty crypto session presents the unlock prompt"), Wait);
+        page.Markup.Should().Contain("Unlock encrypted data");
         page.FindAll("#sources-table").Should().BeEmpty();
         page.FindAll("#sources-empty").Should().BeEmpty(
             "the empty state belongs to an unlocked session, not a locked one");
         recorder.Calls.Should().BeEmpty(
-            "the page must not ask the API for anything before it holds a key");
+            "the page must not ask the API for anything before an unlock attempt runs");
 
-        // ---- wrong passphrase: inline 401, no key cached, field cleared ----
+        // ---- wrong passphrase: in-browser GCM tag failure, no token, field cleared ----
         page.Find("#unlock-passphrase").Change(WrongPassphrase);
         page.Find("#unlock-submit").Click();
         page.WaitForAssertion(() =>
@@ -103,51 +114,70 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
             error.GetAttribute("role").Should().Be("alert");
             error.TextContent.Should().Be("The passphrase is not valid.");
         }, Wait);
-        flow.Store.DekStore.IsEmpty.Should().BeTrue(
-            "a failed unwrap must never cache a key");
+        flow.Store.CryptoSession.IsEmpty.Should().BeTrue(
+            "a failed unwrap must never mint a session token");
         page.Find("#unlock-passphrase").GetAttribute("value").Should().BeNullOrEmpty(
             "a typo is retyped, not resubmitted blindly");
 
-        // ---- right passphrase: the server's own key, then the table ----
+        // ---- right passphrase: real kdf + unlock, then the table ----
         page.Find("#unlock-passphrase").Change(FlowPassphrase);
         page.Find("#unlock-submit").Click();
         page.WaitForAssertion(
             () => page.Find("#sources-empty").Should().NotBeNull(
                 "the unlocked page loads GET /v1/user/sources (this caller owns none)"), Wait);
-        flow.Store.DekStore.DekBase64.Should().Be(expectedDek,
-            "the cached key is exactly the one the server unwrapped for this caller");
+        flow.Store.CryptoSession.IsEmpty.Should().BeFalse(
+            "the unlock response's token is cached in the in-memory store");
+        flow.Store.CryptoSession.Token.Should().NotBeNullOrWhiteSpace();
         page.FindAll("#unlock-submit").Should().BeEmpty(
             "the prompt leaves the markup once the session is unlocked");
 
         // ---- what actually went over the wire ----
-        var unwraps = recorder.Calls
-            .Where(call => call.Path == "/v1/user/account/unwrap-dek")
+        var kdfCalls = recorder.Calls
+            .Where(call => call.Path == "/v1/account/kdf")
             .ToList();
-        unwraps.Should().HaveCount(2, "one unwrap attempt per passphrase");
-        unwraps[0].Status.Should().Be(HttpStatusCode.Unauthorized);
-        unwraps[1].Status.Should().Be(HttpStatusCode.OK);
-        unwraps.Should().OnlyContain(
-            call => call.DekHeader == null,
-            "X-User-Dek cannot ride the unwrap — the key does not exist until it returns");
-        unwraps.Should().OnlyContain(
+        kdfCalls.Should().HaveCount(2, "one material fetch per attempt (the browser cannot cache)");
+        kdfCalls.Should().OnlyContain(
+            call => call.Status == HttpStatusCode.OK,
+            "the material is non-secret and the caller is authenticated");
+        kdfCalls.Should().OnlyContain(
             call => call.Authorization == $"Bearer {bearer}",
-            "the unwrap is an authenticated call, like every other one here");
-        unwraps[0].Body.Should().Contain(WrongPassphrase);
-        unwraps[1].Body.Should().Contain(
-            $"\"passphrase\":\"{FlowPassphrase}\"",
-            "the passphrase travels exactly once, in the request body");
+            "the kdf read is an authenticated call, like every other one here");
+        kdfCalls.Should().OnlyContain(
+            call => call.SessionHeader == null,
+            "the account namespace carries no session header — unlock is what mints it");
+
+        var unlocks = recorder.Calls
+            .Where(call => call.Path == "/v1/account/unlock")
+            .ToList();
+        unlocks.Should().ContainSingle(
+            "only the successful attempt POSTs a DEK — the wrong passphrase never leaves the browser");
+        unlocks[0].Status.Should().Be(HttpStatusCode.OK);
+        unlocks[0].Authorization.Should().Be($"Bearer {bearer}");
+        unlocks[0].SessionHeader.Should().BeNull();
+        unlocks[0].Body.Should().Contain(
+            $"\"dek\":\"{expectedDek}\"",
+            "the unwrapped DEK the stored material hides is exactly what the server wraps");
+        unlocks[0].Body.Should().NotContain(FlowPassphrase,
+            "the passphrase is never POSTed anywhere (Q-E9 removal)");
+
+        recorder.Calls.Should().NotContain(
+            call => call.Body is not null
+                && (call.Body.Contains(FlowPassphrase, StringComparison.Ordinal)
+                    || call.Body.Contains(WrongPassphrase, StringComparison.Ordinal)),
+            "no request body anywhere carries either passphrase");
 
         var list = recorder.Calls.Should().ContainSingle(
                 call => call.Path.StartsWith("/v1/user/sources", StringComparison.Ordinal))
             .Which;
         list.Status.Should().Be(HttpStatusCode.OK,
-            "the list decrypts each config, so 200 proves the returned key was accepted as X-User-Dek");
+            "the list decrypts each config, so 200 proves the presented X-Crypto-Session was accepted");
         list.Authorization.Should().Be($"Bearer {bearer}");
-        list.DekHeader.Should().Be(expectedDek);
+        list.SessionHeader.Should().Be(flow.Store.CryptoSession.Token,
+            "CryptoSessionHandler supplies the minted token on every /v1/user/* call");
 
         recorder.Calls.Should().NotContain(
-            call => call.Path.StartsWith("/v1/user/account/kdf", StringComparison.Ordinal),
-            "R2: no GET /kdf either — no Argon2 material is ever fetched for in-browser derivation");
+            call => call.Path == "/v1/user/account/unwrap-dek",
+            "M5T1: the legacy unwrap route is not part of this flow at all");
     }
 
     // -----------------------------------------------------------------------
@@ -156,7 +186,8 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Task step 9's happy path against the real fixture: add through the
+    /// Task step 9's happy path against the real fixture: unlock through the
+    /// prompt first (real kdf + unlock pair), add through the
     /// dialog (schema-mirroring client check, then a REAL Greenmail connection
     /// test before save), the row's inline password panel with a wrong and a
     /// right password, fetch-now's info toast with the counts plus the
@@ -177,22 +208,23 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
         var userId = await AdminTestHost.SeedUserAsync(
             factory, SourcesTestHost.UniqueEmail("m2t6-flow"));
         var bearer = await AdminTestHost.BearerAsync(factory, userId, "User");
-        var dek = await SourcesTestHost.SetRealKdfMaterialAsync(factory, userId, FlowPassphrase);
+        await SourcesTestHost.SetRealKdfMaterialAsync(factory, userId, FlowPassphrase);
 
         using var recorder = new RecordingHandler { InnerHandler = factory.Server.CreateHandler() };
-        using var flow = BuildFlow(factory, recorder, bearer, dek: null);
+        using var flow = BuildFlow(factory, recorder, bearer, session: null, userId);
 
         var page = flow.RenderComponent<SourcesPage>();
         var toasts = flow.RenderComponent<ToastContainer>();
 
-        // ---- unlock (R2) ----
+        // ---- unlock (the §13.17 flow) ----
         page.WaitForAssertion(
             () => page.Find("#unlock-submit").Should().NotBeNull(), Wait);
         page.Find("#unlock-passphrase").Change(FlowPassphrase);
         page.Find("#unlock-submit").Click();
         page.WaitForAssertion(
             () => page.Find("#sources-empty").Should().NotBeNull(), Wait);
-        flow.Store.DekStore.DekBase64.Should().Be(dek);
+        flow.Store.CryptoSession.IsEmpty.Should().BeFalse(
+            "the unlock response's token is what the rest of this fact rides");
 
         // ---- add through the dialog, tested against the live Greenmail ----
         page.Find("#add-source-open").Click();
@@ -296,9 +328,12 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
         (await SourcesTestHost.MessagesAsync(factory, sourceId)).Should().HaveCount(2);
         (await SourceCountAsync(factory, userId)).Should().Be(1);
 
-        // ---- transport: every sources call carries the JWT and the M2-only key ----
+        // ---- transport: every sources call carries the JWT and the session token ----
         recorder.Calls.Count(
-                call => call.Path == "/v1/user/account/unwrap-dek")
+                call => call.Path == "/v1/account/kdf")
+            .Should().Be(1, "one unlock attempt fetches the kdf material once");
+        recorder.Calls.Count(
+                call => call.Path == "/v1/account/unlock")
             .Should().Be(1, "one unlock unlocks the page");
         var sourcesCalls = recorder.Calls
             .Where(call => call.Path.StartsWith("/v1/user/sources", StringComparison.Ordinal))
@@ -308,8 +343,11 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
             call => call.Authorization == $"Bearer {bearer}",
             "BearerTokenHandler stamps the JWT on every call");
         sourcesCalls.Should().OnlyContain(
-            call => call.DekHeader == dek,
-            "DekHeaderHandler supplies X-User-Dek on every sources call once unlocked");
+            call => call.SessionHeader == flow.Store.CryptoSession.Token,
+            "CryptoSessionHandler supplies X-Crypto-Session on every sources call once unlocked");
+        recorder.Calls.Should().NotContain(
+            call => call.Body is not null && call.Body.Contains(FlowPassphrase, StringComparison.Ordinal),
+            "the passphrase never rides any request");
     }
 
     // -----------------------------------------------------------------------
@@ -320,8 +358,8 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
     /// The delete step 9 ends on: confirm modal -> DELETE -> the row is gone,
     /// the empty state returns and neither the source row nor its encrypted
     /// config blob survives. This session starts UNLOCKED (the prompt itself is
-    /// proven by the two facts above) with a fresh DEK the dialog's POST
-    /// encrypts under.
+    /// proven by the two facts above) with a crypto session minted straight
+    /// through POST /v1/account/unlock before the first render.
     /// </summary>
     [Fact]
     public async Task SourcesFlow_Delete_RemovesRow_AndShowsEmptyState()
@@ -331,10 +369,11 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
         var userId = await AdminTestHost.SeedUserAsync(
             factory, SourcesTestHost.UniqueEmail("m2t6-delete"));
         var bearer = await AdminTestHost.BearerAsync(factory, userId, "User");
-        var dek = SourcesTestHost.NewDek();
+        var session = await SourcesTestHost.UnlockAsync(
+            AccountTestHost.CreateClient(factory), bearer, SourcesTestHost.NewDek());
 
         using var recorder = new RecordingHandler { InnerHandler = factory.Server.CreateHandler() };
-        using var flow = BuildFlow(factory, recorder, bearer, dek);
+        using var flow = BuildFlow(factory, recorder, bearer, session, userId);
 
         var page = flow.RenderComponent<SourcesPage>();
         var toasts = flow.RenderComponent<ToastContainer>();
@@ -381,6 +420,9 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
             0, "the message_sources row is gone");
         (await SourcesTestHost.FindBlobAsync(factory, blobId)).Should().BeNull(
             "SQ-7: the config blob is removed together with its source");
+        recorder.Calls.Should().OnlyContain(
+            call => call.SessionHeader == session,
+            "the pre-minted token rides every sources call this fact makes");
     }
 
     // -----------------------------------------------------------------------
@@ -389,22 +431,24 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Bearer outside, DEK inside — the order Program.cs registers them, so a
-    /// 401-retry clone passes back through DekHeaderHandler instead of losing
-    /// the key header. The caller's token (and optionally DEK) is in the store
-    /// before the first component renders.
+    /// Bearer outside, crypto-session inside — the order Program.cs registers
+    /// them, so a 401-retry clone passes back through CryptoSessionHandler
+    /// instead of losing the session header. The caller's token (and optional
+    /// pre-minted crypto session) is in the store before the first component
+    /// renders.
     /// </summary>
     private static SourcesFlowContext BuildFlow(
         WebApplicationFactory<Program> factory,
         RecordingHandler recorder,
         string bearer,
-        string? dek)
+        string? session,
+        Guid userId)
     {
         var store = new TokenStore();
         store.Set(bearer);
-        if (dek is not null)
+        if (session is not null)
         {
-            store.SetDek(dek);
+            store.CryptoSession.SetToken(session);
         }
 
         var refreshHttp = new HttpClient(factory.Server.CreateHandler())
@@ -417,13 +461,14 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
         var apiHttp = new HttpClient(
             new BearerTokenHandler(store, authenticator)
             {
-                InnerHandler = new DekHeaderHandler(store) { InnerHandler = recorder },
+                InnerHandler = new CryptoSessionHandler(store) { InnerHandler = recorder },
             })
         {
             BaseAddress = BaseAddress,
         };
 
-        return new SourcesFlowContext(apiHttp, store);
+        var encryption = factory.Services.GetRequiredService<IEncryptionService>();
+        return new SourcesFlowContext(apiHttp, store, encryption, userId);
     }
 
     /// <summary>Removes every live toast so the next assertion can count exactly the new one.</summary>
@@ -455,20 +500,87 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
     }
 
     /// <summary>
+    /// The Q-O28 seam in-process: the SAME primitives the browser build uses
+    /// (Isopoh Argon2id, as <c>Argon2idAesGcmEncryptionService.DeriveKekCore</c>
+    /// does, plus AES-256-GCM over ciphertext||tag without AAD, as
+    /// <c>GenerateAndWrapDek</c> wraps it) standing in for the vendored
+    /// argon2-browser WASM + crypto.subtle that bUnit cannot run. A wrong
+    /// passphrase fails the GCM tag here exactly like it does in the browser,
+    /// so <see cref="WrongPassphraseException"/> reaches the prompt unchanged.
+    /// No production service and no socket is involved (AGENTS.md hard
+    /// constraint 3): <see cref="IEncryptionService"/> is the library the test
+    /// host already resolved.
+    /// </summary>
+    private sealed class DotNetUnlockCrypto(IEncryptionService encryption, Guid userId) : IUnlockCrypto
+    {
+        private const int NonceByteLength = 12;
+        private const int GcmTagByteLength = 16;
+
+        public Task<byte[]> DeriveKekAsync(
+            string passphrase,
+            byte[] salt,
+            KdfParamsDto kdfParams,
+            CancellationToken ct = default)
+            => Task.FromResult(encryption.DeriveKek(userId, passphrase, salt, new KdfParams
+            {
+                MemoryKb = kdfParams.MemoryKb,
+                Iterations = kdfParams.Iterations,
+                Parallelism = kdfParams.Parallelism,
+                HashLength = kdfParams.HashLength,
+            }));
+
+        public Task<byte[]> UnwrapDekAsync(
+            ReadOnlyMemory<byte> kek,
+            byte[] dekWrapped,
+            byte[] dekNonce,
+            CancellationToken ct = default)
+        {
+            if (dekNonce.Length != NonceByteLength || dekWrapped.Length <= GcmTagByteLength)
+            {
+                throw new UnlockCryptoException("Malformed DEK wrap.");
+            }
+
+            try
+            {
+                var plaintext = new byte[dekWrapped.Length - GcmTagByteLength];
+                using var aes = new AesGcm(kek.Span, GcmTagByteLength);
+                aes.Decrypt(
+                    dekNonce,
+                    dekWrapped.AsSpan(0, plaintext.Length),
+                    dekWrapped.AsSpan(plaintext.Length),
+                    plaintext);
+                return Task.FromResult(plaintext);
+            }
+            catch (CryptographicException ex)
+            {
+                // The GCM tag did not authenticate — the wrong-passphrase
+                // verdict the browser's crypto.subtle produces.
+                throw new WrongPassphraseException("The passphrase is not valid.", ex);
+            }
+        }
+    }
+
+    /// <summary>
     /// bUnit context for the flow: the production HttpClient (bearer handler +
-    /// DEK handler over the TestServer), the singleton token store the chain
-    /// and the pages share, and the M2T6 registrations from Program.cs (toast
-    /// bus + typed sources client over that same HttpClient).
+    /// crypto-session handler over the TestServer), the singleton token store
+    /// the chain and the pages share, and the Program.cs registrations the
+    /// unlock prompt and sources page need (account client + unlock service
+    /// over the same HttpClient, with the Q-O28 crypto seam substituted by
+    /// <see cref="DotNetUnlockCrypto"/> — bUnit has no JS runtime).
     /// </summary>
     private sealed class SourcesFlowContext : TestContext
     {
-        public SourcesFlowContext(HttpClient api, TokenStore store)
+        public SourcesFlowContext(HttpClient api, TokenStore store, IEncryptionService encryption, Guid userId)
         {
             Services.AddSingleton(store);
             Services.AddSingleton(api);
             Services.AddSingleton<JwtRoleParser>();
             Services.AddSingleton<ToastService>();
             Services.AddScoped(sp => new SourcesClient(sp.GetRequiredService<HttpClient>()));
+            Services.AddScoped(sp => new AccountClient(sp.GetRequiredService<HttpClient>()));
+            Services.AddScoped<IUnlockCrypto>(
+                _ => new DotNetUnlockCrypto(encryption, userId));
+            Services.AddScoped<UnlockService>();
         }
 
         public TokenStore Store => Services.GetRequiredService<TokenStore>();
@@ -485,8 +597,9 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
     /// <summary>
     /// The recording seam between the SPA's handler chain and the TestServer:
     /// method, path, body and status plus the two headers under test —
-    /// <c>Authorization</c> and the M2-only <c>X-User-Dek</c> — captured after
-    /// both handlers stamped the request and before the server saw it.
+    /// <c>Authorization</c> and the session-key envelope <c>X-Crypto-Session</c>
+    /// — captured after both handlers stamped the request and before the
+    /// server saw it.
     /// </summary>
     private sealed class RecordingHandler : DelegatingHandler
     {
@@ -496,7 +609,7 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
             string? Body,
             HttpStatusCode Status,
             string? Authorization,
-            string? DekHeader);
+            string? SessionHeader);
 
         private readonly List<RecordedCall> _calls = [];
 
@@ -520,8 +633,8 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             var authorization = request.Headers.Authorization?.ToString();
-            var dekHeader = request.Headers.TryGetValues(
-                    DekHeaderHandler.HeaderName, out var values)
+            var sessionHeader = request.Headers.TryGetValues(
+                    CryptoSessionHandler.HeaderName, out var values)
                 ? string.Join(",", values)
                 : null;
             var path = request.RequestUri?.PathAndQuery ?? "/";
@@ -536,7 +649,7 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
                     body,
                     response.StatusCode,
                     authorization,
-                    dekHeader));
+                    sessionHeader));
             }
 
             return response;

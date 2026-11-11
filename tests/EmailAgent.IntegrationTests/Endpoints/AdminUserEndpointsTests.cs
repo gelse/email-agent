@@ -138,12 +138,19 @@ internal static class AdminTestHost
         HttpMethod method,
         string path,
         string bearer,
-        object? body = null)
+        object? body = null,
+        string? session = null)
     {
         var request = new HttpRequestMessage(method, path)
         {
             Headers = { Authorization = new AuthenticationHeaderValue("Bearer", bearer) },
         };
+
+        if (session is not null)
+        {
+            // M5T1: the X-Crypto-Session envelope every /v1/user/* route reads.
+            request.Headers.Add(SourcesTestHost.SessionHeaderName, session);
+        }
 
         if (body is not null)
         {

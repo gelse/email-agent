@@ -6,11 +6,12 @@
 @inject NavigationManager Nav
 @inject ToastService Toasts
 
-@* M2T6: the user's sources screen. Order of gates: client-side role check on
-   the JWT (routing source of truth in the SPA), then the M2-only DEK gate —
-   without a cached key the table stays hidden behind PassphrasePrompt (SQ-12,
-   adjudication R2: the key is unwrapped server-side and cached in
-   TokenStore.DekStore, never derived in the browser). *@
+@* M2T6 screen, migrated by M5T1: the user's sources screen. Order of gates:
+   client-side role check on the JWT (routing source of truth in the SPA),
+   then the session-key envelope gate — without a vault unlock the table stays
+   hidden behind UnlockPrompt (SQ-M5-1 / §13.17: the DEK is POSTed once to
+   /v1/account/unlock, the browser keeps only the X-Crypto-Session token in
+   TokenStore.CryptoSession, and every call below rides it). *@
 <PageTitle>Sources — Email Agent</PageTitle>
 
 @if (!_authorized)
@@ -21,14 +22,15 @@ else if (!_unlocked)
 {
     <h1>Sources</h1>
 
-    @* Re-locking (dek-invalid) must explain itself: this branch has no table
-       to hang an inline error on, so the banner renders above the prompt. *@
+    @* Re-locking (403 crypto-locked / dek-invalid) must explain itself: this
+       branch has no table to hang an inline error on, so the banner renders
+       above the prompt. *@
     @if (_error is not null)
     {
         <div class="error-box" id="sources-error" role="alert">@_error</div>
     }
 
-    <PassphrasePrompt OnUnlocked="OnUnlockedAsync" />
+    <UnlockPrompt OnUnlocked="OnUnlockedAsync" />
 }
 else
 {
@@ -199,14 +201,14 @@ else
         }
 
         _authorized = true;
-        _unlocked = !TokenStore.DekStore.IsEmpty;
+        _unlocked = !TokenStore.CryptoSession.IsEmpty;
         if (_unlocked)
         {
             await LoadAsync();
         }
     }
 
-    /// <summary>Raised by the prompt once the server handed back the DEK.</summary>
+    /// <summary>Raised by the prompt once the server handed back the session token.</summary>
     private async Task OnUnlockedAsync()
     {
         _unlocked = true;
@@ -216,11 +218,12 @@ else
     private async Task LoadAsync()
     {
         // M2T6 review fix (round 3): the store is the source of truth for the
-        // DEK gate, not this page's _unlocked flag. A TokenStore.SignIn in
+        // unlock gate, not this page's _unlocked flag. A TokenStore.SignIn in
         // another tab (the shared ea_refresh cookie signing someone else in)
-        // clears DekStore while THIS page still believes it is unlocked —
-        // without this check every later request would go out without a key
-        // and the table would sit in a permanent error state until an F5.
+        // clears CryptoSession while THIS page still believes it is unlocked —
+        // without this check every later request would go out without a
+        // X-Crypto-Session and the table would sit in a permanent error state
+        // until an F5.
         if (!EnsureUnlocked())
         {
             return;
@@ -239,15 +242,15 @@ else
         {
             Nav.NavigateTo("/account/login");
         }
-        catch (SourcesApiException ex) when (IsDekRejected(ex))
+        catch (SourcesApiException ex) when (IsCryptoLocked(ex))
         {
-            // M2T6 review fix (belt-and-braces): the cached key does not open
-            // this account's blobs (a key that outlived an account switch, or
-            // a rotated key) — drop it and fall back to the unlock prompt
-            // instead of leaving a dead end that never recovers. The message
-            // is rendered in the locked branch: the table it would sit above
-            // is gone by then.
-            Relock("Your cached key does not unlock this account's saved sources. "
+            // M5T1: the crypto-session is gone or no longer opens this
+            // account's data (expiry, logout/refresh revocation elsewhere, or
+            // a key the stored blobs were re-wrapped under) — drop the token
+            // and fall back to the unlock prompt instead of leaving a dead end
+            // that never recovers. The message is rendered in the locked
+            // branch: the table it would sit above is gone by then.
+            Relock("Your unlock has expired or no longer opens this account's saved sources. "
                 + "Enter your passphrase again to continue.");
         }
         catch (SourcesApiException ex)
@@ -292,9 +295,9 @@ else
         {
             Nav.NavigateTo("/account/login");
         }
-        catch (SourcesApiException ex) when (IsDekRejected(ex))
+        catch (SourcesApiException ex) when (IsCryptoLocked(ex))
         {
-            Relock("Your cached key does not unlock this account's saved sources. "
+            Relock("Your unlock has expired or no longer opens this account's saved sources. "
                 + "Enter your passphrase again to continue.");
         }
         catch (SourcesApiException ex)
@@ -312,26 +315,27 @@ else
     }
 
     /// <summary>
-    /// <c>true</c> when the API rejected the <c>X-User-Dek</c> header itself:
-    /// either the dedicated <c>/errors/dek-invalid</c> verdict, or the
-    /// validation problem naming <c>x-user-dek</c> (a request that went out
-    /// with no usable key). Both mean "re-lock and ask for the passphrase",
-    /// never "show an inline error forever".
+    /// <c>true</c> when the API reports the vault is shut: the M5T1 session
+    /// gate's 403 <c>/errors/crypto-locked</c> verdict (no/invalid/expired
+    /// <c>X-Crypto-Session</c>), or the sources namespace's own 400
+    /// <c>/errors/dek-invalid</c> verdict (the session's key does not open a
+    /// stored blob). Both mean "re-lock and ask for the passphrase", never
+    /// "show an inline error forever".
     /// </summary>
-    private static bool IsDekRejected(SourcesApiException ex)
-        => ex.Status == HttpStatusCode.BadRequest && (
-            ex.Problem?.Type == "/errors/dek-invalid"
-            || (ex.Problem?.Type == "/errors/validation"
-                && ex.FieldErrors.Any(entry => entry.Name == "x-user-dek")));
+    private static bool IsCryptoLocked(SourcesApiException ex)
+        => (ex.Status == HttpStatusCode.Forbidden
+            && ex.Problem?.Type == "/errors/crypto-locked")
+        || (ex.Status == HttpStatusCode.BadRequest
+            && ex.Problem?.Type == "/errors/dek-invalid");
 
     /// <summary>
-    /// Drops the cached key, empties the table and returns the page to the
+    /// Drops the session token, empties the table and returns the page to the
     /// locked branch with an explanatory banner (the locked branch is where
     /// <c>#sources-error</c> renders).
     /// </summary>
     private void Relock(string message)
     {
-        TokenStore.DekStore.Clear();
+        TokenStore.CryptoSession.Clear();
         _sources.Clear();
         _loaded = false;
         _nextCursor = null;
@@ -354,18 +358,18 @@ else
 
     /// <summary>
     /// Gate every unlock-dependent action: the store, not <c>_unlocked</c>,
-    /// decides. When the key vanished (another tab re-signed-in) the page
-    /// re-locks instead of firing a request that would go out without
-    /// <c>X-User-Dek</c>.
+    /// decides. When the token vanished (another tab re-signed-in, or the
+    /// server-side session expired) the page re-locks instead of firing a
+    /// request that would go out without <c>X-Crypto-Session</c>.
     /// </summary>
     private bool EnsureUnlocked()
     {
-        if (!TokenStore.DekStore.IsEmpty)
+        if (!TokenStore.CryptoSession.IsEmpty)
         {
             return true;
         }
 
-        Relock("Your session no longer has an unlock key. "
+        Relock("Your session no longer holds an unlock token. "
             + "Enter your passphrase again to continue.");
         return false;
     }
@@ -474,9 +478,9 @@ else
                 _rowTestError = outcome.Error ?? "The connection test failed.";
             }
         }
-        catch (SourcesApiException ex) when (IsDekRejected(ex))
+        catch (SourcesApiException ex) when (IsCryptoLocked(ex))
         {
-            Relock("Your cached key does not unlock this account's saved sources. "
+            Relock("Your unlock has expired or no longer opens this account's saved sources. "
                 + "Enter your passphrase again to continue.");
         }
         catch (SourcesApiException ex)
@@ -525,9 +529,9 @@ else
                 $"Fetched '{source.DisplayName}': {result.NewProcessedMessages} new message(s), {result.Processed} processed.");
             await LoadAsync();
         }
-        catch (SourcesApiException ex) when (IsDekRejected(ex))
+        catch (SourcesApiException ex) when (IsCryptoLocked(ex))
         {
-            Relock("Your cached key does not unlock this account's saved sources. "
+            Relock("Your unlock has expired or no longer opens this account's saved sources. "
                 + "Enter your passphrase again to continue.");
         }
         catch (SourcesApiException ex) when (ex.Status == HttpStatusCode.Unauthorized)

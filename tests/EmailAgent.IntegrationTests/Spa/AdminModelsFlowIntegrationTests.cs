@@ -310,8 +310,9 @@ public class AdminModelsFlowIntegrationTests(OpenAIMockFixture fixture, Postgres
 
     /// <summary>
     /// Bearer outside, recorder inside — the order Program.cs registers its
-    /// handlers (no DekHeaderHandler: the M2-only header belongs to the
-    /// sources namespace, never to the admin catalog).
+    /// handlers (M5T1: CryptoSessionHandler rides the chain but stamps only
+    /// /v1/user/*, so admin-catalog calls carry no session credential they
+    /// would not be judged on).
     /// </summary>
     private static ModelsFlowContext BuildFlow(
         WebApplicationFactory<Program> factory,

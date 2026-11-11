@@ -9,7 +9,8 @@ namespace EmailAgent.IntegrationTests.Endpoints;
 
 // ---------------------------------------------------------------------------
 // M2T5 — POST /v1/user/sources/test-connection. The route is collection-level
-// with a {type_id, config} body (no source id yet, no DEK header), and the
+// with a {type_id, config} body (no source id yet, no per-request DEK — the
+// X-Crypto-Session gate covers it), and the
 // contract has two halves: expected connector failures are VALUES in a 200
 // {ok:false, error} body the SPA renders inline, while failures the API can
 // prove at its own boundary (schema, plugin) are RFC 7807 400s raised before
@@ -121,7 +122,8 @@ public class SourcesTestConnectionTests(PostgresFixture postgres, GreenMailFixtu
             {
                 type_id = "carrier-pigeon",
                 config = greenmail.CreateConfig(),
-            }));
+            },
+            session: host.Session));
 
         (await AccountTestHost.ReadProblemAsync(response, HttpStatusCode.BadRequest))
             .GetProperty("type").GetString().Should().Be("/errors/plugin-not-registered");
@@ -168,14 +170,15 @@ public class SourcesTestConnectionTests(PostgresFixture postgres, GreenMailFixtu
         using var client = host.Client;
 
         using var empty = await client.SendAsync(SourcesTestHost.RawRequest(
-            HttpMethod.Post, "/v1/user/sources/test-connection", host.Bearer, string.Empty));
+            HttpMethod.Post, "/v1/user/sources/test-connection", host.Bearer,
+            string.Empty, session: host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             empty, HttpStatusCode.BadRequest, "/errors/validation", "body"))
             .Should().Contain("required");
 
         using var noType = await client.SendAsync(SourcesTestHost.RawRequest(
             HttpMethod.Post, "/v1/user/sources/test-connection", host.Bearer,
-            """{"config":{}}"""));
+            """{"config":{}}""", session: host.Session));
         (await SourcesTestHost.ReadErrorReasonAsync(
             noType, HttpStatusCode.BadRequest, "/errors/validation", "type_id"))
             .Should().NotBeNullOrWhiteSpace();
@@ -185,5 +188,6 @@ public class SourcesTestConnectionTests(PostgresFixture postgres, GreenMailFixtu
     private Task<HttpResponseMessage> SendAsync(SourcesHost host, System.Text.Json.JsonElement config)
         => host.Client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, "/v1/user/sources/test-connection", host.Bearer,
-            new { type_id = SourcesTestHost.ImapTypeId, config }));
+            new { type_id = SourcesTestHost.ImapTypeId, config },
+            session: host.Session));
 }

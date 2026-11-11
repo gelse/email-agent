@@ -25,15 +25,15 @@ public sealed class M2E2ECollection : ICollectionFixture<PostgresFixture>
 /// M2 exit-criterion facts (acceptance criterion: <c>dotnet test --filter
 /// Category=M2EndToEnd</c>), one [Fact] per smoke step of
 /// <c>scripts/smoke-m2.sh</c> with the same assertions the bash script pins
-/// (task M2T7 §Steps 3). Each fact runs the whole chain: a fresh user + DEK
-/// (harness), a real Greenmail mailbox seeded over SMTP, fetch-now through the
+/// (task M2T7 §Steps 3). Each fact runs the whole chain: a fresh user + DEK +
+/// unlocked crypto session (harness), a real Greenmail mailbox seeded over SMTP, fetch-now through the
 /// live IMAP plugin, persistence checks, and (for the last fact) the audit
 /// HMAC chain walk <c>tools/AuditVerify</c> performs in the smoke script.
 /// </summary>
 /// <remarks>
-/// Recorded adaptation (M2T7 dispatch): the harness starts at the user + DEK
-/// step instead of admin login → OTP-login → change-password → set-passphrase
-/// → unwrap-DEK; that login half is covered by <c>M1EndToEndTests</c> and by
+/// Recorded adaptation (M2T7 dispatch): the harness starts at the user + DEK +
+/// unlock step instead of admin login → OTP-login → change-password → set-passphrase
+/// (M5T1: the unwrap-DEK leg became POST /v1/account/unlock + X-Crypto-Session); that login half is covered by <c>M1EndToEndTests</c> and by
 /// smoke-m2.sh itself, so repeating it per fact would only multiply runtime.
 /// </remarks>
 [Trait("Category", "M2EndToEnd")]
@@ -192,7 +192,7 @@ public sealed class M2EndToEndTests(PostgresFixture postgres, GreenMailFixture g
             lastUid, "AdvanceCheckpointAsync takes the max UID of the batch");
 
         using var get = await client.SendAsync(SourcesTestHost.Request(
-            HttpMethod.Get, $"/v1/user/sources/{sourceId}", host.Bearer, dek: host.Dek));
+            HttpMethod.Get, $"/v1/user/sources/{sourceId}", host.Bearer, session: host.Session));
         get.StatusCode.Should().Be(HttpStatusCode.OK);
         var dto = await AccountTestHost.ReadJsonAsync(get);
         dto.GetProperty("checkpoint").GetProperty("last_uid").GetString().Should().Be(lastUid);
@@ -222,7 +222,7 @@ public sealed class M2EndToEndTests(PostgresFixture postgres, GreenMailFixture g
         using var client = host.Client;
         using var fetch = await client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, $"/v1/user/sources/{sourceId}/fetch-now",
-            host.Bearer, dek: host.Dek));
+            host.Bearer, session: host.Session));
         fetch.StatusCode.Should().Be(HttpStatusCode.OK);
 
         using var scope = factory.Services.CreateScope();
@@ -254,8 +254,8 @@ public sealed class M2EndToEndTests(PostgresFixture postgres, GreenMailFixture g
         return (host, SourcesTestHost.IdOf(created));
     }
 
-    private Task<HttpResponseMessage> FetchAsync(SourcesHost host, Guid sourceId, string? dek = null)
+    private Task<HttpResponseMessage> FetchAsync(SourcesHost host, Guid sourceId, string? session = null)
         => host.Client.SendAsync(SourcesTestHost.Request(
             HttpMethod.Post, $"/v1/user/sources/{sourceId}/fetch-now",
-            host.Bearer, dek: dek ?? host.Dek));
+            host.Bearer, session: session ?? host.Session));
 }

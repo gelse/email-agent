@@ -143,6 +143,14 @@ builder.Services.AddSingleton<IJwtTokenIssuer, JwtTokenIssuer>();
 builder.Services.AddTransient<OriginValidator>();
 builder.Services.AddRateLimitPolicies();
 
+// M5T1 (SQ-M5-1): the request-scoped crypto-session accessor every user-data
+// handler resolves the DEK from (replacing M2–M4's X-User-Dek header). The
+// store + SESSION__* options are registered by AddInfrastructure's
+// AddCryptoSessions; the accessor is the Api-layer seam over HttpContext, so
+// it is registered here next to the rest of the auth stack.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICryptoSessionAccessor, HttpCryptoSessionAccessor>();
+
 // M1T4 task step 4: optional startup chain verification. On a tampering
 // signal the host logs a structured error — it never crashes the process
 // (operators run `tools/AuditVerify` from M1T9 for the report).
@@ -385,6 +393,14 @@ app.UseRateLimiter();
 // policies above still own the 5/min 429 path).
 app.UseMiddleware<AuthenticatedRateLimitMiddleware>();
 
+// M5T1 (SQ-M5-1 / §13.17): the generic 401-vs-403 split for /v1/user/* —
+// valid JWT + no/locked/expired crypto session → RFC 7807 403
+// /errors/crypto-locked (absent/expired JWT stays the bearer handler's 401,
+// which has already run above). Placed after the rate-limit middleware so the
+// §13.14 headers wrap this 403 like every other authenticated response, and
+// after UseAuthentication/UseAuthorization as the task requires.
+app.UseCryptoSession();
+
 // M1T4 task step 8: the Origin gate on the refresh path (§13.9 / §14) —
 // runs for every /v1/account/refresh request before M1T6's endpoint sees it.
 app.Use(async (context, next) =>
@@ -411,8 +427,10 @@ app.MapAccountEndpoints();
 app.MapAdminUserEndpoints();
 
 // M2T5: the §13.3 /user/sources namespace (CRUD + /test-connection +
-// /{id}/fetch-now), [Authorize(Roles = "User")], cursor pagination per §13.13,
-// and the M2-only GET /v1/user/account/kdf the SPA derives X-User-Dek from.
+// /{id}/fetch-now), [Authorize(Roles = "User")], cursor pagination per §13.13.
+// The M2 GET /v1/user/account/kdf read ships alongside (M5T1 keeps it — the
+// unlock flow's own material read is GET /v1/account/kdf in the account
+// namespace; the old X-User-Dek transport both derived from is removed).
 // Mapped before the catch-all so the literal routes always outrank it.
 app.MapSourcesEndpoints();
 app.MapActionsEndpoints();

@@ -4,6 +4,7 @@ using EmailAgent.Core.Audit;
 using EmailAgent.Core.Errors;
 using EmailAgent.Core.Identity;
 using EmailAgent.Core.Options;
+using EmailAgent.Core.Security;
 using EmailAgent.Infrastructure.Audit;
 using EmailAgent.Infrastructure.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -40,6 +41,12 @@ namespace EmailAgent.Infrastructure.Identity;
 /// <see cref="RefreshTokenExpiredException"/> before any consume step — the
 /// TTL has server-side teeth regardless of what the cookie claims.
 /// </para>
+/// <para>
+/// M5T1 (§13.11 / SQ-M5-1): <see cref="RevokeFamilyAsync"/> — reuse detection's
+/// path — cascades to the user's in-memory crypto session with reason
+/// <c>refresh_family_revoked</c> and a <c>crypto_session_revoked</c> audit row
+/// carrying only <c>{session_id, reason}</c> (never the token or DEK).
+/// </para>
 /// </remarks>
 public sealed class RefreshTokenStore : IRefreshTokenStore
 {
@@ -48,16 +55,19 @@ public sealed class RefreshTokenStore : IRefreshTokenStore
 
     private readonly EmailAgentDbContext _db;
     private readonly IAuditLogger _audit;
+    private readonly ICryptoSessionStore _cryptoSessions;
     private readonly TimeSpan _ttl;
 
     public RefreshTokenStore(
         EmailAgentDbContext db,
         IAuditLogger audit,
+        ICryptoSessionStore cryptoSessions,
         IOptions<AuditOptions> auditOptions,
         IOptions<AuthOptions> authOptions)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _audit = audit ?? throw new ArgumentNullException(nameof(audit));
+        _cryptoSessions = cryptoSessions ?? throw new ArgumentNullException(nameof(cryptoSessions));
         _ = auditOptions ?? throw new ArgumentNullException(nameof(auditOptions));
         _ttl = authOptions?.Value?.RefreshTokenTtl ?? TimeSpan.FromDays(14);
     }
@@ -197,6 +207,45 @@ public sealed class RefreshTokenStore : IRefreshTokenStore
             .ExecuteUpdateAsync(
                 s => s.SetProperty(r => r.RevokedAt, DateTimeOffset.UtcNow),
                 ct);
+
+        // M5T1 / §13.11: family revocation cascades to the user's crypto
+        // session (SQ-M5-1). Reuse detection is the production caller, so a
+        // burned refresh family always forces a re-unlock. Runs fail-closed
+        // inside the caller's transaction: the in-memory revoke cannot roll
+        // back, and revoking spuriously only costs the user a re-unlock.
+        var userId = await _db.RefreshTokens
+            .AsNoTracking()
+            .Where(r => r.FamilyId == familyId)
+            .Select(r => (Guid?)r.UserId)
+            .FirstOrDefaultAsync(ct);
+
+        if (userId is null)
+        {
+            return;
+        }
+
+        var revokedSessionId = _cryptoSessions.RevokeByUser(userId.Value);
+        if (revokedSessionId is null)
+        {
+            // Nothing live to revoke — no session, no audit row.
+            return;
+        }
+
+        var user = await _db.Users
+            .AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Id == userId.Value, ct);
+
+        await _audit.LogAsync(
+            new AuditEvent(
+                ActorUserId: userId.Value,
+                ActorRole: user?.Role.ToString(),
+                Action: AuditActions.CryptoSessionRevoked,
+                TargetType: "crypto_session",
+                TargetId: revokedSessionId.Value.ToString(),
+                MetadataJson:
+                    $"{{\"session_id\":\"{revokedSessionId.Value}\",\"reason\":\"refresh_family_revoked\"}}",
+                Ip: null),
+            ct);
     }
 
     public async Task RevokeAsync(byte[] tokenHash, CancellationToken ct)

@@ -74,17 +74,17 @@ public class AccountPagesTests
     }
 
     /// <summary>
-    /// M2T6 review fix (round 1 CRITICAL, pinned here for the primary path):
-    /// a sign-in is a new principal — the DEK cached by a previous session
-    /// must not survive into this one (it would be sent as X-User-Dek for
-    /// another account's sources, and no re-wrap path exists in M2).
+    /// M2T6 review fix (round 1 CRITICAL, pinned here for the primary path),
+    /// carried into M5T1: a sign-in is a new principal — the crypto-session
+    /// token cached by a previous session must not survive into this one
+    /// (it would be sent as X-Crypto-Session for another account's sources).
     /// </summary>
     [Fact]
     public void Login_Form_Success_DropsPreCachedDek()
     {
         using var ctx = new SpaTestContext();
         ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
-        ctx.Store.DekStore.SetDek("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+        ctx.Store.CryptoSession.SetToken(SpaTestContext.CryptoSessionToken);
         ctx.Handler.Responder = (request, _) =>
         {
             if (request.RequestUri!.AbsolutePath == "/v1/account/login")
@@ -105,9 +105,9 @@ public class AccountPagesTests
         cut.WaitForAssertion(() => ctx.Store.AccessToken.Should().NotBeNull(
             "the new session's token replaced the old one"));
 
-        ctx.Store.DekStore.IsEmpty.Should().BeTrue(
-            "a new principal must never inherit the previous session's key");
-        ctx.Store.DekStore.DekBase64.Should().BeNull();
+        ctx.Store.CryptoSession.IsEmpty.Should().BeTrue(
+            "a new principal must never inherit the previous session's unlock");
+        ctx.Store.CryptoSession.Token.Should().BeNull();
     }
 
     [Fact]
@@ -134,15 +134,16 @@ public class AccountPagesTests
     }
 
     /// <summary>
-    /// The OTP sign-in path is a sign-in too: it must drop a pre-cached DEK
-    /// exactly like the password path (M2T6 round-1 CRITICAL, both callers).
+    /// The OTP sign-in path is a sign-in too: it must drop a pre-cached
+    /// crypto-session token exactly like the password path (M2T6 round-1
+    /// CRITICAL, both callers; carried into M5T1).
     /// </summary>
     [Fact]
     public void OtpLogin_Form_Success_DropsPreCachedDek()
     {
         using var ctx = new SpaTestContext();
         ctx.Store.Set(SpaTestContext.FakeJwt(role: "User"));
-        ctx.Store.DekStore.SetDek("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+        ctx.Store.CryptoSession.SetToken(SpaTestContext.CryptoSessionToken);
         ctx.Handler.Responder = (request, _) =>
             request.RequestUri!.AbsolutePath == "/v1/account/otp-login"
                 ? Task.FromResult(SpaTestContext.Json(
@@ -157,8 +158,8 @@ public class AccountPagesTests
         cut.WaitForAssertion(() => ctx.Store.AccessToken.Should().NotBeNull(
             "the OTP exchange stored the new access token"));
 
-        ctx.Store.DekStore.IsEmpty.Should().BeTrue(
-            "an OTP sign-in is a new principal as well — no inherited key");
+        ctx.Store.CryptoSession.IsEmpty.Should().BeTrue(
+            "an OTP sign-in is a new principal as well — no inherited unlock");
         ctx.Nav.Uri.Should().Be("http://localhost/account/change-password",
             "the OTP flow always continues into the first-login passphrase setup (Q-E6)");
     }

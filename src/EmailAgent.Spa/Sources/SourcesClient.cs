@@ -7,11 +7,11 @@ using EmailAgent.Spa.Auth;
 namespace EmailAgent.Spa.Sources;
 
 // ---------------------------------------------------------------------------
-// M2T6: the SPA's typed client for the seven M2T5 /v1/user/sources routes —
-// one method per endpoint (task scope bullet 5). The transport is the named
-// "Api" HttpClient, so BearerTokenHandler supplies the JWT and
-// DekHeaderHandler supplies the M2-only X-User-Dek header; neither is
-// repeated here.
+// M2T6 client, migrated by M5T1: the SPA's typed client for the seven M2T5
+// /v1/user/sources routes — one method per endpoint (task scope bullet 5).
+// The transport is the named "Api" HttpClient, so BearerTokenHandler
+// supplies the JWT and CryptoSessionHandler (M5T1) supplies the
+// X-Crypto-Session session-key envelope header; neither is repeated here.
 //
 // The DTOs below mirror the published wire shapes (§13.13 snake_case) with
 // explicit [JsonPropertyName] members, exactly like Auth/ApiModels.cs — the

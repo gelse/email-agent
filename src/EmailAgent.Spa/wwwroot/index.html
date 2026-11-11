@@ -26,6 +26,14 @@
         <a href="" class="reload">Reload</a>
         <a class="dismiss">🗙</a>
     </div>
+    <!-- M5T1 (SQ-M5-1 / Q-O28): the browser-side unlock crypto. The vendored
+         argon2-browser bundle carries its WASM inline (no runtime download,
+         works behind the compose stack's nginx), and unlock-crypto.js exposes
+         emailAgent.deriveKek / emailAgent.unwrapDek to the Blazor
+         IUnlockCrypto implementation. Loaded before the framework so the
+         globals exist by the time the SPA can ask for an unlock. -->
+    <script src="js/argon2-bundled.min.js"></script>
+    <script src="js/unlock-crypto.js"></script>
     <script src="_framework/blazor.webassembly.js"></script>
 </body>
 

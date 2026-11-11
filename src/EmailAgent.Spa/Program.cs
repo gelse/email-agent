@@ -2,6 +2,7 @@ using EmailAgent.Spa;
 using EmailAgent.Spa.Auth;
 using EmailAgent.Spa.Models;
 using EmailAgent.Spa.Notifications;
+using EmailAgent.Spa.Security;
 using EmailAgent.Spa.Sources;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Components.Web;
@@ -38,14 +39,16 @@ builder.Services.AddAuthorizationCore(options =>
 
 // "Api" client: bearer header from the token store; on 401 one silent
 // refresh through the cookie path, then a single retry (BearerTokenHandler).
-// M2T6: DekHeaderHandler rides inside it so the M2-only X-User-Dek header is
-// attached to every sources request whenever the session holds a key; the
-// 401-retry clone re-passes through it, so the header survives the refresh.
+// M5T1: CryptoSessionHandler rides inside it so the session-key envelope
+// X-Crypto-Session header is attached to every /v1/user/* call whenever the
+// session holds a vault token (§13.17 / SQ-M5-1); the 401-retry clone
+// re-passes through it, so the header survives the refresh. This replaces
+// M2T6's DekHeaderHandler and the X-User-Dek transport (Q-E9 removal).
 builder.Services.AddTransient<BearerTokenHandler>();
-builder.Services.AddTransient<DekHeaderHandler>();
+builder.Services.AddTransient<CryptoSessionHandler>();
 builder.Services.AddHttpClient("Api", c => c.BaseAddress = new Uri(apiBaseUrl))
     .AddHttpMessageHandler<BearerTokenHandler>()
-    .AddHttpMessageHandler<DekHeaderHandler>();
+    .AddHttpMessageHandler<CryptoSessionHandler>();
 // Pages inject the default HttpClient — bound to the "Api" configuration.
 builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("Api"));
 
@@ -67,9 +70,18 @@ builder.Services.AddScoped(sp => new ModelsClient(sp.GetRequiredService<HttpClie
 // picker loads from, over the same "Api" chain (bearer from
 // BearerTokenHandler).
 builder.Services.AddScoped(sp => new UserModelsClient(sp.GetRequiredService<HttpClient>()));
-// M4T4: actions (DEK-gated, via DekHeaderHandler) and notifications.
+// M4T4: actions (crypto-session gated, via CryptoSessionHandler) and
+// notifications.
 builder.Services.AddScoped(sp => new EmailAgent.Spa.Actions.ActionsClient(sp.GetRequiredService<HttpClient>()));
 builder.Services.AddScoped(sp => new EmailAgent.Spa.NotificationsApi.NotificationsClient(sp.GetRequiredService<HttpClient>()));
+
+// M5T1 (SQ-M5-1 / §13.17): the vault-unlock mechanism — the account-namespace
+// client, the browser-side crypto seam (JS impl over the vendored
+// argon2-browser WASM + crypto.subtle; tests swap a deterministic fake), and
+// the orchestrating unlock service. UnlockPrompt consumes the service.
+builder.Services.AddScoped(sp => new AccountClient(sp.GetRequiredService<HttpClient>()));
+builder.Services.AddScoped<IUnlockCrypto, JsUnlockCrypto>();
+builder.Services.AddScoped<UnlockService>();
 
 var host = builder.Build();
 

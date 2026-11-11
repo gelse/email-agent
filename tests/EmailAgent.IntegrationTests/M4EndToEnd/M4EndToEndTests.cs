@@ -173,7 +173,7 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
             sourceMessage);
 
         using var list = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Get, "/v1/user/notifications?filter[unread]=true", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Get, "/v1/user/notifications?filter[unread]=true", host.Bearer, session: host.Session));
         list.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await list.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
@@ -183,14 +183,15 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
         var notifId = items.First(i => i.GetProperty("related_id").GetGuid() == processedId).GetProperty("id").GetGuid();
 
         using var read = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Post, $"/v1/user/notifications/{notifId}/read", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Post, $"/v1/user/notifications/{notifId}/read", host.Bearer,
+                session: host.Session));
         read.StatusCode.Should().Be(HttpStatusCode.OK);
         using var readDoc = JsonDocument.Parse(await read.Content.ReadAsStringAsync());
         readDoc.RootElement.GetProperty("read_at").ValueKind.Should().NotBe(JsonValueKind.Null);
 
         // cleared from unread filter
         using var list2 = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Get, "/v1/user/notifications?filter[unread]=true", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Get, "/v1/user/notifications?filter[unread]=true", host.Bearer, session: host.Session));
         using var doc2 = JsonDocument.Parse(await list2.Content.ReadAsStringAsync());
         doc2.RootElement.GetProperty("items").EnumerateArray()
             .Should().NotContain(i => i.GetProperty("id").GetGuid() == notifId);
@@ -284,9 +285,9 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
         created.TryGetProperty("password", out _).Should().BeFalse();
         created.GetProperty("config").TryGetProperty("password", out _).Should().BeFalse("password never returned");
 
-        // GET requires DEK
+        // GET requires an unlocked crypto session
         using var get = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Get, $"/v1/user/actions/{id}", host.Bearer, dek: host.Dek));
+            SourcesTestHost.Request(HttpMethod.Get, $"/v1/user/actions/{id}", host.Bearer, session: host.Session));
         get.StatusCode.Should().Be(HttpStatusCode.OK);
         var getBody = await AccountTestHost.ReadJsonAsync(get);
         getBody.GetProperty("config").TryGetProperty("password", out _).Should().BeFalse();
@@ -307,7 +308,7 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
             },
         };
         using var patch = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Patch, $"/v1/user/actions/{id}", host.Bearer, patchBody, host.Dek));
+            SourcesTestHost.Request(HttpMethod.Patch, $"/v1/user/actions/{id}", host.Bearer, patchBody, host.Session));
         patch.StatusCode.Should().Be(HttpStatusCode.OK, await patch.Content.ReadAsStringAsync());
         var patched = await AccountTestHost.ReadJsonAsync(patch);
         patched.GetProperty("display_name").GetString().Should().Be("CRUD Renamed");
@@ -327,7 +328,7 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
         var (_, processedId, _) = await M4TestHarness.SeedAgentAndProcessedAsync(factory, host.UserId);
         await M4TestHarness.SeedPendingActionAsync(factory, processedId, id);
         using var del409 = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Delete, $"/v1/user/actions/{id}", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Delete, $"/v1/user/actions/{id}", host.Bearer, session: host.Session));
         del409.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var prob = await AccountTestHost.ReadProblemAsync(del409, HttpStatusCode.Conflict);
         prob.GetProperty("type").GetString().Should().Be("/errors/action-in-use");
@@ -335,7 +336,7 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
         // remove pending ref, then delete succeeds and blob gone
         await M4TestHarness.ClearPendingAsync(factory, id);
         using var del = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Delete, $"/v1/user/actions/{id}", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Delete, $"/v1/user/actions/{id}", host.Bearer, session: host.Session));
         del.StatusCode.Should().Be(HttpStatusCode.NoContent);
         (await M4TestHarness.FindActionConfigAsync(factory, id, allowNull: true)).Should().BeNull();
         (await M4TestHarness.FindBlobAsync(factory, blobId)).Should().BeNull();
@@ -355,27 +356,27 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
         var n2 = await M4TestHarness.SeedNotificationAsync(factory, host.UserId, "b");
 
         using var r1 = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Post, $"/v1/user/notifications/{n1}/read", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Post, $"/v1/user/notifications/{n1}/read", host.Bearer, session: host.Session));
         r1.StatusCode.Should().Be(HttpStatusCode.OK);
         var r1Body = await AccountTestHost.ReadJsonAsync(r1);
         var readAt1 = r1Body.GetProperty("read_at").GetDateTimeOffset();
 
         // idempotent: read_at unchanged (timestamptz is microsecond-precision)
         using var r1b = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Post, $"/v1/user/notifications/{n1}/read", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Post, $"/v1/user/notifications/{n1}/read", host.Bearer, session: host.Session));
         r1b.StatusCode.Should().Be(HttpStatusCode.OK);
         var r1bBody = await AccountTestHost.ReadJsonAsync(r1b);
         r1bBody.GetProperty("read_at").GetDateTimeOffset().Should().BeCloseTo(readAt1, TimeSpan.FromMilliseconds(1));
 
         using var all = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Post, "/v1/user/notifications/read-all", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Post, "/v1/user/notifications/read-all", host.Bearer, session: host.Session));
         all.StatusCode.Should().Be(HttpStatusCode.OK);
         var allBody = await AccountTestHost.ReadJsonAsync(all);
         allBody.GetProperty("updated").GetInt32().Should().BeGreaterThanOrEqualTo(1, "at least n2 was unread");
 
         // second read-all returns 0
         using var all2 = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Post, "/v1/user/notifications/read-all", host.Bearer));
+            SourcesTestHost.Request(HttpMethod.Post, "/v1/user/notifications/read-all", host.Bearer, session: host.Session));
         (await AccountTestHost.ReadJsonAsync(all2)).GetProperty("updated").GetInt32().Should().Be(0);
     }
 
@@ -467,7 +468,7 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
         var id = created.GetProperty("id").GetGuid();
 
         using (var patch = await host.Client.SendAsync(SourcesTestHost.Request(HttpMethod.Patch,
-            $"/v1/user/actions/{id}", host.Bearer, new { display_name = "Chain Renamed" }, host.Dek)))
+            $"/v1/user/actions/{id}", host.Bearer, new { display_name = "Chain Renamed" }, host.Session)))
         {
             patch.StatusCode.Should().Be(HttpStatusCode.OK);
         }
@@ -485,7 +486,7 @@ public sealed class M4EndToEndTests(PostgresFixture postgres, GreenMailFixture g
             sourceMessage2);
 
         using (var del = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Delete, $"/v1/user/actions/{id}", host.Bearer)))
+            SourcesTestHost.Request(HttpMethod.Delete, $"/v1/user/actions/{id}", host.Bearer, session: host.Session)))
         {
             del.StatusCode.Should().Be(HttpStatusCode.NoContent);
         }
@@ -536,7 +537,8 @@ internal static class M4TestHarness
         Guid UserId,
         string Bearer,
         string Dek,
-        byte[] DekBytes);
+        byte[] DekBytes,
+        string Session);
 
     public static async Task<M4Host> CreateHostAsync(PostgresFixture postgres, GreenMailFixture greenmail)
     {
@@ -549,8 +551,8 @@ internal static class M4TestHarness
         registry.RegisterActionHandler("imap-reply", new ImapReplyActionHandler());
         registry.RegisterActionHandler("imap-forward", new ImapForwardActionHandler());
 
-        var (userId, bearer, dek) = await SourcesTestHost.AddUserAsync(factory);
-        return new M4Host(factory, client, userId, bearer, dek, Convert.FromBase64String(dek));
+        var (userId, bearer, dek, session) = await SourcesTestHost.AddUserAsync(factory);
+        return new M4Host(factory, client, userId, bearer, dek, Convert.FromBase64String(dek), session);
     }
 
     public static object GreenmailSmtpConfig(GreenMailFixture gm) => new
@@ -576,7 +578,7 @@ internal static class M4TestHarness
             config,
         };
         using var response = await host.Client.SendAsync(
-            SourcesTestHost.Request(HttpMethod.Post, "/v1/user/actions", host.Bearer, body, host.Dek));
+            SourcesTestHost.Request(HttpMethod.Post, "/v1/user/actions", host.Bearer, body, host.Session));
         response.StatusCode.Should().Be(HttpStatusCode.Created, await response.Content.ReadAsStringAsync());
         return await AccountTestHost.ReadJsonAsync(response);
     }
