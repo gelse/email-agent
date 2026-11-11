@@ -161,7 +161,7 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
             "the passphrase is never POSTed anywhere (Q-E9 removal)");
 
         recorder.Calls.Should().NotContain(
-            call => call.Body is not null
+            call => call.Body != null
                 && (call.Body.Contains(FlowPassphrase, StringComparison.Ordinal)
                     || call.Body.Contains(WrongPassphrase, StringComparison.Ordinal)),
             "no request body anywhere carries either passphrase");
@@ -346,7 +346,7 @@ public class SourcesFlowIntegrationTests(PostgresFixture postgres, GreenMailFixt
             call => call.SessionHeader == flow.Store.CryptoSession.Token,
             "CryptoSessionHandler supplies X-Crypto-Session on every sources call once unlocked");
         recorder.Calls.Should().NotContain(
-            call => call.Body is not null && call.Body.Contains(FlowPassphrase, StringComparison.Ordinal),
+            call => call.Body != null && call.Body.Contains(FlowPassphrase, StringComparison.Ordinal),
             "the passphrase never rides any request");
     }
 

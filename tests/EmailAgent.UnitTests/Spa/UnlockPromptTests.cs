@@ -215,7 +215,8 @@ public class UnlockPromptTests
             type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
                 .Select(field => field.FieldType.Name)
                 .Should().OnlyContain(
-                    name => name is "Lock" or "String" or "Boolean" or "Action" or "CryptoSessionStore",
+                    name => name == "Lock" || name == "String" || name == "Boolean"
+                        || name == "Action" || name == "CryptoSessionStore",
                     $"{type.Name} must have no localStorage/sessionStorage/JS-interop member — the token is RAM-only");
         }
     }

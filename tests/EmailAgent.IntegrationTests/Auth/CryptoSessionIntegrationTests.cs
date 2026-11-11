@@ -483,14 +483,14 @@ public class CryptoSessionIntegrationTests(PostgresFixture postgres)
 
         // The refreshed JWT is accepted and the session alive; the touch would
         // slide idle by 30m if the absolute cap did not clamp it.
-        using var alive = await SourcesGetAsync(client, bearer2, session);
+        using var alive = await SourcesGetAsync(client, bearer2!, session);
         alive.StatusCode.Should().Be(HttpStatusCode.OK);
 
         // t~12: past the absolute deadline (t0+10). The JWT is still valid
         // (900s TTL — hence 403, not 401), and idle alone would still be alive
         // (t~4 + 30m): only the absolute cap can explain this refusal.
         await Task.Delay(TimeSpan.FromSeconds(8));
-        using var expired = await SourcesGetAsync(client, bearer2, session);
+        using var expired = await SourcesGetAsync(client, bearer2!, session);
         await ReadCryptoLockedAsync(expired);
     }
 
