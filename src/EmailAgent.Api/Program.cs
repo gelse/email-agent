@@ -53,6 +53,12 @@ var builder = WebApplication.CreateBuilder(args);
 // M1T4: AddInfrastructure also calls AddAuth — IRefreshTokenStore,
 // IAuditLogger (AUDIT__HmacKey, §16 / SQ-2) and the Auth:AUDIT__HmacKey
 // validation above.
+//
+// M5T2: AddInfrastructure also calls AddScheduling — SchedulerHostedService
+// (the §10 producer polling message_sources every SCHEDULER__TickInterval,
+// defaults per SQ-M5-6/Q-O4) plus the bounded singleton IJobQueue
+// (WORKERS__ChannelCapacity) M5T3's pool drains. Hosted-service registration
+// only — no API surface change.
 builder.Services.AddInfrastructure(builder.Configuration);
 
 // M1T4 step 6: ASP.NET Core Identity on `users` (IdentityUser<Guid>), roles

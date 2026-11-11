@@ -3,11 +3,13 @@ using EmailAgent.Core.Identity;
 using EmailAgent.Core.Security;
 using EmailAgent.Infrastructure.Audit;
 using EmailAgent.Infrastructure.Identity;
+using EmailAgent.Infrastructure.Scheduling;
 using EmailAgent.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace EmailAgent.Infrastructure;
@@ -18,9 +20,11 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Registers <see cref="EmailAgentDbContext"/> against the
     /// <c>ConnectionStrings:Postgres</c> configuration key (M1T2), the M1T3
-    /// encryption service (<see cref="AddEncryption"/>), and the M1T4 auth
+    /// encryption service (<see cref="AddEncryption"/>), the M1T4 auth
     /// services (<see cref="AddAuth"/>): the refresh-token store, the
-    /// HMAC-chained audit writer and the JWT token issuer.
+    /// HMAC-chained audit writer and the JWT token issuer, the M5T1
+    /// crypto-session store (<see cref="AddCryptoSessions"/>) and the M5T2
+    /// scheduler hosted service + bounded job channel (<see cref="AddScheduling"/>).
     /// </summary>
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
@@ -47,6 +51,10 @@ public static class ServiceCollectionExtensions
         services.AddEncryption(configuration);
         services.AddAuth(configuration);
         services.AddCryptoSessions(configuration);
+
+        // M5T2: the scheduler hosted service + the bounded job channel
+        // (SCHEDULER__* / WORKERS__ChannelCapacity — SQ-M5-6 / Q-O4).
+        services.AddScheduling(configuration);
 
         return services;
     }
@@ -133,6 +141,45 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRefreshTokenStore, RefreshTokenStore>();
         services.AddScoped<IAuditLogger, AuditLogger>();
         services.AddScoped<IOtpService, OtpService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// M5T2 (SQ-M5-6 / Q-O4): binds the <c>Scheduler</c> section
+    /// (<c>SCHEDULER__TickInterval</c> / <c>SCHEDULER__MinInterval</c> /
+    /// <c>SCHEDULER__JitterPercent</c>) onto <see cref="SchedulerOptions"/>
+    /// and the <c>Workers</c> section's <c>WORKERS__ChannelCapacity</c> onto
+    /// <see cref="JobQueueOptions"/>, both validated at host start
+    /// (<c>ValidateOnStart</c>): a non-positive tick interval, a non-positive
+    /// floor, a <c>JitterPercent</c> outside <c>[0, 100]</c>, or a
+    /// non-positive channel capacity fails startup instead of busy-looping
+    /// the scheduler or binding an unusable channel. Registers the singleton
+    /// <see cref="IJobQueue"/> (the bounded <see cref="ChannelJobQueue"/>
+    /// shared by the M5T2 producer and M5T3's consumers), the
+    /// <see cref="IJitterSource"/> seam, the <see cref="TimeProvider"/> clock
+    /// seam (<c>TryAdd</c> — Program.cs registers its own), and the
+    /// <see cref="SchedulerHostedService"/> hosted service itself.
+    /// </summary>
+    public static IServiceCollection AddScheduling(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddOptions<SchedulerOptions>()
+            .Bind(configuration.GetSection(SchedulerOptions.SectionName))
+            .Validate(SchedulerOptions.IsValid, SchedulerOptions.InvalidMessage)
+            .ValidateOnStart();
+
+        services.AddOptions<JobQueueOptions>()
+            .Bind(configuration.GetSection(JobQueueOptions.SectionName))
+            .Validate(JobQueueOptions.IsValid, JobQueueOptions.InvalidMessage)
+            .ValidateOnStart();
+
+        services.TryAddSingleton(TimeProvider.System);
+
+        services.AddSingleton<IJobQueue, ChannelJobQueue>();
+        services.AddSingleton<IJitterSource, RandomJitterSource>();
+        services.AddHostedService<SchedulerHostedService>();
 
         return services;
     }
