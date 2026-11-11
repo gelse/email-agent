@@ -11,6 +11,7 @@ using EmailAgent.Api.Sources;
 using EmailAgent.Api.Actions;
 using EmailAgent.Contracts.AgentEngines;
 using EmailAgent.Core.Options;
+using EmailAgent.Core.Security;
 using EmailAgent.Infrastructure;
 using EmailAgent.Infrastructure.Agents;
 using EmailAgent.Infrastructure.Entities;
